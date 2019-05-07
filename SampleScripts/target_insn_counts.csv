@@ -1,0 +1,2 @@
+Instruction.set,insn.LOADS,insn.STORES,insn.vmovsd,insn.vmulsd,insn.vaddsd,insn.vfmadd231sd,insn.vsubsd,insn.vmovapd,insn.vdivsd,insn.vfmadd213sd,insn.vfnmsub231sd,insn.vsqrtsd
+AVX2,120,45,80,50,50,25,20,15,10,10,10,10
