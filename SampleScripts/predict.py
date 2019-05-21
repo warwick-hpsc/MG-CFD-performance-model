@@ -151,6 +151,7 @@ def generate_wg_cycles_predictions(input_prediction_data):
 
 		arch_to_flag = {
 			SupportedArchitectures.SANDY: "cpu_is_sandy",
+			SupportedArchitectures.IVY: "cpu_is_ivy",
 			SupportedArchitectures.HASWELL: "cpu_is_haswell", 
 			SupportedArchitectures.BROADWELL: "cpu_is_broadwell",
 			SupportedArchitectures.SKYLAKE: "cpu_is_skylake",
