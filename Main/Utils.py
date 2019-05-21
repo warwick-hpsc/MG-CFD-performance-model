@@ -6,10 +6,11 @@ from sets import Set
 class SupportedArchitectures:
   UNKNOWN = 0
   SANDY = 1
-  HASWELL = 2
-  BROADWELL = 3
-  SKYLAKE = 4
-  KNL = 5
+  IVY = 2
+  HASWELL = 3
+  BROADWELL = 4
+  SKYLAKE = 5
+  KNL = 6
 
 exec_unit_instructions = {}
 exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
@@ -95,7 +96,9 @@ def cpu_string_to_arch(cpu):
     return SupportedArchitectures.BROADWELL
   if "i5-4" in cpu:
     return SupportedArchitectures.HASWELL
-  if "i5-v2" in cpu:
+  if is_xeon and "v2" in cpu:
+    return SupportedArchitectures.IVY
+  if "i5-2" in cpu:
     return SupportedArchitectures.SANDY
 
   raise Exception("Do not know arch of CPU string '{0}'".format(cpu))

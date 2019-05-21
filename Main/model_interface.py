@@ -64,6 +64,8 @@ def init_conf():
     conf["cpu_is_skylake"] = False
     conf["cpu_is_broadwell"] = False
     conf["cpu_is_haswell"] = False
+    conf["cpu_is_ivy"] = False
+    conf["cpu_is_sandy"] = False
     conf["cpu_is_westmere"] = False
     conf["cpu_is_knl"] = False
     conf["avx512_simd_enabled"] = False

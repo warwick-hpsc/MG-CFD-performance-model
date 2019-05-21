@@ -446,6 +446,7 @@ cpu_is_knl <- cpu_is_phi && (length(grep("7210",cpu))>0)
 cpu_is_skylake <- cpu_is_xeon && (length(grep("Silver",cpu))>0)
 cpu_is_broadwell <- cpu_is_xeon && (length(grep("v4",cpu))>0)
 cpu_is_haswell <- length(grep("i5-4",cpu))>0
+cpu_is_ivy <- cpu_is_xeon && (length(grep("v2",cpu))>0)
 cpu_is_sandy <- length(grep("i5-2",cpu))>0
 cpu_is_westmere <- cpu_is_xeon && (length(grep("X5650",cpu))>0)
 
@@ -504,6 +505,8 @@ else if (cpu_is_westmere)
     model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_westmere", "value"=cpu_is_westmere))
 else if (cpu_is_haswell)
     model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_haswell", "value"=cpu_is_haswell))
+else if (cpu_is_ivy)
+    model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_ivy", "value"=cpu_is_ivy))
 else if (cpu_is_sandy)
     model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_sandy", "value"=cpu_is_sandy))
 else {

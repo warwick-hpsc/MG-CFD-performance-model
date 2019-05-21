@@ -35,7 +35,7 @@ class ArchModel(object):
             self.alu_ports = [0,1,5,6]
             self.store_port = 4
             self.load_ports = [2,3]
-        elif conf["cpu_is_sandy"]:
+        elif conf["cpu_is_sandy"] or conf["cpu_is_ivy"]:
             self.fp_add_ports = [1]
             self.fp_mul_ports = [0]
             self.vec_alu_ports = [0,2,5]
