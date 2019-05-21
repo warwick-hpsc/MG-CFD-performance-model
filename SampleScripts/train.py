@@ -15,19 +15,19 @@ processed_performance_data_dirpath = args.data_dirpath
 model_src_dirpath = os.path.join(script_dirpath, "../Main")
 
 ## Now train the model to estimate CPI rates of CPU execution units:
-tdir="Training"
+tdir = os.path.join(script_dirpath, "Training")
 if not os.path.isdir(tdir):
 	os.mkdir(tdir)
 
 for f in ["instruction-counts.mean.csv", "LoopNumIters.mean.csv", "PAPI.mean.csv", "Times.mean.csv"]:
-	shutil.copyfile(os.path.join(processed_performance_data_dirpath, f), os.path.join(script_dirpath, tdir, f))
+	shutil.copyfile(os.path.join(processed_performance_data_dirpath, f), os.path.join(tdir, f))
 
 os.chdir(tdir)
-# subprocess.call(["Rscript", model_src_dirpath+"/train_model.R"])
+subprocess.call(["Rscript", model_src_dirpath+"/train_model.R"])
 
+os.chdir("../")
 pdir="Prediction"
-if not os.path.isdir(os.path.join(script_dirpath, pdir)):
-	os.mkdir(os.path.join(script_dirpath, pdir))
-# for f in ["merged_performance_data.csv", "cpi_estimates.csv"]:
+if not os.path.isdir(pdir):
+	os.mkdir(pdir)
 for f in ["cpi_estimates.csv"]:
-	shutil.copyfile(os.path.join(script_dirpath, tdir, f), os.path.join(script_dirpath, pdir, f))
+	shutil.copyfile(os.path.join("Training", f), os.path.join(pdir, f))

@@ -7,7 +7,7 @@ from sets import Set
 script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
 ## Dirpath to MG-CFD performance model:
-projection_model_dirpath = os.path.join(os.getenv("HOME"), "Working", "MG-CFD-performance-model/Main")
+projection_model_dirpath = os.path.join(script_dirpath, "../", "Main")
 
 py_model_filepath = os.path.join(projection_model_dirpath, "model_interface.py")
 
@@ -191,7 +191,6 @@ def generate_wg_cycles_predictions(input_prediction_data):
 
 	return predictions_df
 
-# target_wg_predictions_filepath = "target_wg_predictions.csv"
 target_wg_predictions_filepath = os.path.join(script_dirpath, "Prediction", "target_wg_predictions.csv")
 if regen or not os.path.isfile(target_wg_predictions_filepath):
 	wg_cycles_predictions = generate_wg_cycles_predictions(input_prediction_data)

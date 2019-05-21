@@ -6,7 +6,6 @@ from sets import Set
 
 script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
-# in_data_filepath = os.path.join(script_dirpath, "Prediction", "merged_performance_data.csv")
 in_data_filepath = os.path.join(script_dirpath, "Training", "merged_performance_data.csv")
 out_data_filepath = os.path.join(script_dirpath, "Prediction", "prepared_performance_data.csv")
 
