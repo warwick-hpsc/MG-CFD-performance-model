@@ -156,6 +156,7 @@ def generate_wg_cycles_predictions(input_prediction_data):
 			SupportedArchitectures.BROADWELL: "cpu_is_broadwell",
 			SupportedArchitectures.SKYLAKE: "cpu_is_skylake",
 			SupportedArchitectures.KNL: "cpu_is_knl",
+			SupportedArchitectures.WESTMERE: "cpu_is_westmere"
 		}
 
 		## Write out model config:

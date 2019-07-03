@@ -43,6 +43,14 @@ class ArchModel(object):
             self.alu_ports = [0,1,5]
             self.store_port = 4
             self.load_ports = [2,3]
+        elif conf["cpu_is_westmere"]:
+            self.fp_add_ports = [1]
+            self.fp_mul_ports = [0]
+            self.vec_alu_ports = [0,5]
+            self.fp_mov_ports = [0,5]
+            self.alu_ports = [0,1,5]
+            self.store_port = 4
+            self.load_ports = [2]
         else:
             raise Exception("Target architecture not modelled.")
         self.num_ports = 9

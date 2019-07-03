@@ -11,6 +11,7 @@ class SupportedArchitectures:
   BROADWELL = 4
   SKYLAKE = 5
   KNL = 6
+  WESTMERE = 7
 
 exec_unit_instructions = {}
 exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
@@ -100,6 +101,8 @@ def cpu_string_to_arch(cpu):
     return SupportedArchitectures.IVY
   if "i5-2" in cpu:
     return SupportedArchitectures.SANDY
+  if "X5650" in cpu:
+    return SupportedArchitectures.WESTMERE
 
   raise Exception("Do not know arch of CPU string '{0}'".format(cpu))
 
