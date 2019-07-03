@@ -28,6 +28,7 @@ script_dirpath <- get_script_filepath()
 source(file.path(script_dirpath, "../utils.R"))
 
 reserved_col_names <- c('Num.threads', 'PAPI.counter', 'Flux.variant', "niters", "kernel")
+mandatory_columns <- c("Instruction.set")
 
 ##########################################################
 ## Model config:
@@ -88,6 +89,9 @@ preprocess_input_csv <- function(D) {
             next
         }
         if (col %in% data_col_names) {
+            next
+        }
+        if (col %in% mandatory_columns) {
             next
         }
         if (length(unique(D[,col]))==1) {
