@@ -15,8 +15,6 @@ class SupportedArchitectures:
 
 exec_unit_instructions = {}
 exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
-# exec_unit_instructions["simd_log"] = ["vxorpd", "vmovq"]
-# exec_unit_instructions["simd_alu"] = ["vpaddd", "vpmulld"]
 exec_unit_instructions["simd_alu"] = ["[v]?pand[d]?", "[v]?andp[sd]", "[v]?xorp.*", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128"]
 exec_unit_instructions["simd_shuffle"] = ["[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*", "vzeroupper"]
 exec_unit_instructions["fp_add"] = ["[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "[v]?dppd", "[v]?max[sp]d", "[v]?min[sp]d", "[v]?comisd"]
@@ -28,6 +26,8 @@ exec_unit_instructions["avx512_alu"] = ["vpxorq", "vptestm.*", "kandw", "kandn.*
 exec_unit_instructions["avx512_shuffle"] = ["valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw"]
 exec_unit_instructions["avx512_misc"] = ["vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]"]
 exec_units = exec_unit_instructions.keys()
+
+insignificant_instructions = ["push", "pushq", "pop", "popq", "xor", "xorl", "sub", "subq", "retq", "testb", "and"]
 
 class UnknownInstruction(Exception):
   def __init__(self, insn_name, occurence_count):
@@ -82,8 +82,7 @@ def map_insn_to_exec_unit(insn):
       if re.match(eu_insn, insn):
         return eu
 
-  raise UnknownInstruction(insn, count)
-  # return ""
+  return ""
 
 def cpu_string_to_arch(cpu):
   is_xeon = "Xeon" in cpu
@@ -121,9 +120,7 @@ def categorise_instructions_tally(tally_filepath):
     insn = row["insn"].lower()
     count = row["count"]
 
-    if insn in ["push", "pop"]:
-      continue
-    if insn in ["xor", "sub", "retq", "testb", "and"] and count == 1:
+    if insn in insignificant_instructions:
       continue
 
     if insn == "loads":
@@ -171,24 +168,23 @@ def categorise_aggregated_instructions_tally(tally_filepath):
 
   for insn_cn in insn_colnames:
     insn = insn_cn.split('.')[1].lower()
+    count = insn_tally[insn_cn]
 
-    if insn in ["push", "pop"]:
-      continue
-    if insn in ["xor", "sub", "retq", "testb", "and"] and count == 1:
+    if insn in insignificant_instructions:
       continue
 
     if insn == "loads":
-      eu_tally["mem.loads"] += insn_tally[insn_cn]
+      eu_tally["mem.loads"] += count
       continue
     if insn == "stores":
-      eu_tally["mem.stores"] += insn_tally[insn_cn]
+      eu_tally["mem.stores"] += count
       continue
 
     eu = map_insn_to_exec_unit(insn)
     exec_unit_found = eu != ""
     if not exec_unit_found:
       raise UnknownInstruction(insn, count)
-    eu_tally["eu."+eu] += insn_tally[insn_cn]
+    eu_tally["eu."+eu] += count
 
   ## Current Intel documentation does not describe how AVX512 instructions are scheduled to 
   ## execution ports, so for now merge with other categories:

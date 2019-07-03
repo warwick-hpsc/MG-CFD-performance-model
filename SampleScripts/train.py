@@ -25,6 +25,9 @@ for f in ["instruction-counts.mean.csv", "LoopNumIters.mean.csv", "PAPI.mean.csv
 os.chdir(tdir)
 subprocess.call(["Rscript", model_src_dirpath+"/train_model.R"])
 
+if not os.path.isfile("cpi_estimates.csv"):
+	raise Exception("Training failed")
+
 os.chdir("../")
 pdir="Prediction"
 if not os.path.isdir(pdir):

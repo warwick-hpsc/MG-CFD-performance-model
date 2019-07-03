@@ -63,6 +63,8 @@ mgcfd_eu_counts = mini_perf_data.loc[np.logical_and(mini_perf_data["Num.threads"
 mgcfd_eu_counts  =  mgcfd_eu_counts.rename(index=str, columns={i:i+".mgcfd"  for i in insn_cats})
 target_eu_counts = target_eu_counts.rename(index=str, columns={i:i+".target" for i in insn_cats})
 insn_diffs = mgcfd_eu_counts.merge(target_eu_counts, validate="one_to_one")
+if insn_diffs.shape[0] == 0:
+	raise Exception("Merge of 'mgcfd_eu_counts' with 'target_eu_counts' produced empty DataFrame")
 for i in insn_cats:
 	insn_diffs[i] = insn_diffs[i+".target"] - insn_diffs[i+".mgcfd"]
 	insn_diffs = insn_diffs.drop([i+".target", i+".mgcfd"],axis=1)
@@ -181,6 +183,9 @@ def generate_wg_cycles_predictions(input_prediction_data):
 			target_wg_prediction = model_data["mini_wg_cycles"] + model_wg_cycles_delta
 		else:
 			target_wg_prediction = model_data["mini_wg_cycles"] - model_wg_cycles_delta
+		if target_wg_prediction < 0.0:
+			print(target_wg_prediction)
+			raise Exception("target_wg_prediction is negative")
 		target_predictions[i] = target_wg_prediction
 
 	## Cleanup:
