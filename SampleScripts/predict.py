@@ -209,10 +209,12 @@ if regen or not os.path.isfile(target_wg_predictions_filepath):
 	mc_prediction_data["target_wg_nsec_prediction"] = mc_prediction_data["target_wg_cycles_prediction"] / mc_prediction_data["ghz_flux"]
 	mc_prediction_data["target_wg_nsec_prediction"] = np.maximum(mc_prediction_data["target_wg_nsec_prediction"], mc_prediction_data["wg_nsec_rw"])
 
+	mc_prediction_data["mini_wg"] = mc_prediction_data["mini_wg_cycles"] / mc_prediction_data["ghz_flux"] / 1e9
+
 	## Clean:
-	mc_prediction_data = mc_prediction_data.drop("target_wg_cycles_prediction", axis=1)
+	# mc_prediction_data = mc_prediction_data.drop("target_wg_cycles_prediction", axis=1)
 	mc_prediction_data = mc_prediction_data.drop(["ghz_flux", "ghz_indirect_rw"], axis=1)
-	mc_prediction_data = mc_prediction_data.drop(["mini_wg_cycles", "mini_wg_cycles_rw"], axis=1)
+	# mc_prediction_data = mc_prediction_data.drop(["mini_wg_cycles", "mini_wg_cycles_rw"], axis=1)
 	mc_prediction_data = mc_prediction_data.drop(["wg_nsec_rw"], axis=1)
 	mc_prediction_data["target_wg_prediction"] = mc_prediction_data["target_wg_nsec_prediction"] / 1e9
 	mc_prediction_data = mc_prediction_data.drop("target_wg_nsec_prediction", axis=1)
