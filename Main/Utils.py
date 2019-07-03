@@ -105,6 +105,19 @@ def cpu_string_to_arch(cpu):
 
   raise Exception("Do not know arch of CPU string '{0}'".format(cpu))
 
+def instructions_tally_to_dict(tally_filepath):
+  counts = {}
+  tally = pd.read_csv(tally_filepath)
+  for idx, row in tally.iterrows():
+    insn = row["insn"].lower()
+    count = row["count"]
+
+    if insn in insignificant_instructions:
+      continue
+
+    counts["insn."+insn] = count
+  return counts
+
 def categorise_instructions_tally(tally_filepath):
   print("Categorising instructions in file: " + tally_filepath)
 
