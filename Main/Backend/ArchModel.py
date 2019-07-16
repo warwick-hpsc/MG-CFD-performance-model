@@ -1,6 +1,8 @@
 import numpy as np
 import os, sys
 
+from pprint import pprint
+
 script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
 import imp
@@ -15,7 +17,7 @@ class ArchModel(object):
             self.fp_add_ports = [0,1]
             self.fp_mul_ports = [0,1]
             self.vec_alu_ports = [0,1,5]
-            self.fp_mov_ports = [5]
+            self.fp_shuf_ports = [5]
             self.alu_ports = [0,1,5,6]
             self.store_port = 4
             self.load_ports = [2,3]
@@ -23,23 +25,23 @@ class ArchModel(object):
             self.fp_add_ports = [0,1]
             self.fp_mul_ports = [0,1]
             self.vec_alu_ports = [0,1]
-            self.fp_mov_ports = 0
+            self.fp_shuf_ports = 0
             self.alu_ports = [2,3]
-            self.store_port = [5]
+            self.store_port = 5
             self.load_ports = [4,5]
         elif conf["cpu_is_haswell"] or conf["cpu_is_broadwell"]:
             self.fp_add_ports = [1]
             self.fp_mul_ports = [0,1]
             self.vec_alu_ports = [0,1,5]
-            self.fp_mov_ports = [5]
+            self.fp_shuf_ports = [5]
             self.alu_ports = [0,1,5,6]
             self.store_port = 4
             self.load_ports = [2,3]
         elif conf["cpu_is_sandy"] or conf["cpu_is_ivy"]:
             self.fp_add_ports = [1]
             self.fp_mul_ports = [0]
-            self.vec_alu_ports = [0,2,5]
-            self.fp_mov_ports = [0,5]
+            self.vec_alu_ports = [0,1,5]
+            self.fp_shuf_ports = [5]
             self.alu_ports = [0,1,5]
             self.store_port = 4
             self.load_ports = [2,3]
@@ -47,12 +49,14 @@ class ArchModel(object):
             self.fp_add_ports = [1]
             self.fp_mul_ports = [0]
             self.vec_alu_ports = [0,5]
-            self.fp_mov_ports = [0,5]
+            self.fp_shuf_ports = [5]
             self.alu_ports = [0,1,5]
             self.store_port = 4
             self.load_ports = [2]
         else:
             raise Exception("Target architecture not modelled.")
+        self.spill_ports = self.load_ports
+
         self.num_ports = 9
 
         self.A = A
@@ -67,6 +71,9 @@ class ArchModel(object):
         self.meta_coefs_names = get_meta_coef_names(conf)
 
     def allocate_cycles_to_ports(self, insn_cycles, port_cycles, ports):
+        if len(ports) == 0:
+            return
+
         cycles_remaining = insn_cycles
         neg_filter = insn_cycles < 0
         if sum(neg_filter) > 0:
@@ -135,7 +142,7 @@ class ArchModel(object):
         ## FP add:
         if "eu.fp_add" in self.insn_indices:
             fp_add_idx = self.insn_indices["eu.fp_add"]
-            fp_add_cycles = y_insn_cycles[:,fp_add_idx]
+            fp_add_cycles = y_insn_cycles[:,fp_add_idx].copy()
             if self.conf["cpu_is_skylake"] and self.conf["avx512_simd_enabled"]:
                 port_cycles[:,0] += fp_add_cycles
                 port_cycles[:,1] += fp_add_cycles
@@ -144,7 +151,7 @@ class ArchModel(object):
         ## FP mult:
         if "eu.fp_mul" in self.insn_indices:
             fp_mul_idx = self.insn_indices["eu.fp_mul"]
-            fp_mul_cycles = y_insn_cycles[:,fp_mul_idx]
+            fp_mul_cycles = y_insn_cycles[:,fp_mul_idx].copy()
             if self.conf["cpu_is_skylake"] and self.conf["avx512_simd_enabled"]:
                 port_cycles[:,0] += fp_mul_cycles
                 port_cycles[:,1] += fp_mul_cycles
@@ -154,17 +161,12 @@ class ArchModel(object):
             walltime_cycles_fp = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
-        ## mov:
-        if "eu.fp_mov" in self.insn_indices:
-            fp_mov_idx = self.insn_indices["eu.fp_mov"]
-            # port_cycles[:,self.fp_mov_ports] += y_insn_cycles[:,fp_mov_idx]
-            self.allocate_cycles_to_ports(y_insn_cycles[:,fp_mov_idx], port_cycles, self.fp_mov_ports)
-        ## simd shuf:
-        if "eu.simd_shuffle" in self.insn_indices:
-            simd_shuffle_idx = self.insn_indices["eu.simd_shuffle"]
-            port_cycles[:,self.fp_mov_ports] += y_insn_cycles[:,simd_shuffle_idx]
+        ## FP shuffle:
+        if "eu.fp_shuffle" in self.insn_indices:
+            fp_shuf_idx = self.insn_indices["eu.fp_shuffle"]
+            self.allocate_cycles_to_ports(y_insn_cycles[:,fp_shuf_idx], port_cycles, self.fp_shuf_ports)
         if do_print or verify:
-            walltime_cycles_movs = np.subtract(port_cycles.max(axis=1), last_cycles)
+            walltime_cycles_shuffles = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
         ## Vec ALU:
@@ -209,12 +211,18 @@ class ArchModel(object):
             walltime_cycles_load = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
+        if "mem.spills" in self.insn_indices:
+            spills_idx = self.insn_indices["mem.spills"]
+            self.allocate_cycles_to_ports(y_insn_cycles[:,spills_idx], port_cycles, self.spill_ports)
+        if do_print or verify:
+            walltime_cycles_spill = np.subtract(port_cycles.max(axis=1), last_cycles)
+            last_cycles = port_cycles.max(axis=1)
+
         y_model = port_cycles.max(axis=1)
 
         if self.conf["do_spill_penalty"]:
             meta_coefs = get_meta_coefs(self.conf, x)
-            # y_model += meta_coefs["spill_penalty"] * self.A.values[:,stores_idx]
-            y_model += meta_coefs["spill_penalty"] * self.A.values[:,loads_idx]
+            y_model += meta_coefs["spill_penalty"] * self.A.values[:,spills_idx]
         if do_print or verify:
             walltime_cycles_spills = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
@@ -248,12 +256,12 @@ class ArchModel(object):
                 if "eu.fp_mul" in self.insn_indices:
                     do_contribute[self.insn_indices["eu.fp_mul"]] = False
 
-            if bool(np.any(walltime_cycles_movs != np.zeros(len(walltime_cycles_movs)))):
+            if bool(np.any(walltime_cycles_shuffles != np.zeros(len(walltime_cycles_shuffles)))):
                 if do_print:
-                    print("MOV/SHUF  | {0}".format(walltime_cycles_movs))
-                do_contribute[self.insn_indices["eu.fp_mov"]] = True
+                    print("FP SHUF   | {0}".format(walltime_cycles_shuffles))
+                do_contribute[self.insn_indices["eu.fp_shuffle"]] = True
             else:
-                do_contribute[self.insn_indices["eu.fp_mov"]] = False
+                do_contribute[self.insn_indices["eu.fp_shuffle"]] = False
 
             if bool(np.any(walltime_cycles_simd_alu != np.zeros(len(walltime_cycles_simd_alu)))):
                 if do_print:
@@ -290,9 +298,14 @@ class ArchModel(object):
                 if "mem.loads" in self.insn_indices:
                     do_contribute[self.insn_indices["mem.loads"]] = False
 
-            if bool(np.any(walltime_cycles_spills != np.zeros(len(walltime_cycles_spills)))):
+            if bool(np.any(walltime_cycles_spill != np.zeros(len(walltime_cycles_spill)))):
                 if do_print:
-                    print("SPILL PEN.| {0}".format(walltime_cycles_mem))
+                    print("SPILLS    | {0}".format(walltime_cycles_spill))
+                if "mem.spills" in self.insn_indices:
+                    do_contribute[self.insn_indices["mem.spills"]] = True
+            else:
+                if "mem.spills" in self.insn_indices:
+                    do_contribute[self.insn_indices["mem.spills"]] = False
 
             if do_print:
                 non_contributing_insns = []

@@ -129,10 +129,8 @@ def find_solution(conf, A, y, am):
     y_error_pct = [ float(e)/a for e,a in zip(y_error, y)]
     print("y_error_pct:")
     print(["{0}%".format(round(100.0*p, 1)) for p in y_error_pct])
-    # y_error_sum = s.calc_model_error_sum(coef_final_estimate)
-    # print("y_error_sum = {0}".format(y_error_sum))
-
-    # return coef_final_estimate
+    y_error_sum = s.calc_model_error_sum(coef_final_estimate)
+    print("y_error_sum = {0}".format(y_error_sum))
 
     coef_names = s.get_coef_names()
     solution_dict = {}
@@ -150,8 +148,7 @@ def write_solution(coef_final_estimate):
         solution_file.write("coef,cpi\n")
         for k in coef_final_estimate:
             # cpi = coef_final_estimate[k]
-            cpi = round(coef_final_estimate[k], 2)
-            # cpi = round(coef_final_estimate[k], 3)
+            cpi = round(coef_final_estimate[k], 4)
             solution_file.write("{0},{1}\n".format(k, cpi))
 
 def write_prediction(conf, cycles_prediction):

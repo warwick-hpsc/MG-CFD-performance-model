@@ -142,28 +142,39 @@ categorise_instructions <- function(ic) {
     }
 
     exec_unit_instructions <- list()
-    exec_unit_instructions[["alu"]] <- c("loop", "cmp", "inc", "j.*", "lea", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl", "xor")
-    # exec_unit_instructions[["simd_log"]] <- c("vxorpd", "vmovq")
-    # exec_unit_instructions[["simd_alu"]] <- c("vpaddd", "vpmulld")
-    exec_unit_instructions[["simd_alu"]] <- c("[v]?pand[d]?", "vandps", "[v]?xorp.*", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128")
-    exec_unit_instructions[["simd_shuffle"]] <- c("[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*")
-    exec_unit_instructions[["fp_add"]] <- c("[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "vmax[sp]d")
-    exec_unit_instructions[["fp_mul"]] <- c("mulsd", "[v]?mul[sp]d", "vf[n]?m[as].*")
-    exec_unit_instructions[["fp_div"]] <- c("[v]?div[sp]d", "[v]?sqrt[sp]d")
-    exec_unit_instructions[["fp_div_fast"]] <- c("vrcp.*", "vrsqrt14pd", "vrsqrt28[sp]d")
-    exec_unit_instructions[["fp_mov"]] <- c("[v]?movd", "[v]?movsd", "[v]?movup[sd]", "[v]?movhp[sd]", "[v]?movap[sd]")
-    exec_unit_instructions[["avx512_alu"]] <- c("vpxorq", "vptestm.*", "kandw", "kandn.*", "knot.*", "kxorw", "kxnorw")
-    exec_unit_instructions[["avx512_shuffle"]] <- c("valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw")
-    exec_unit_instructions[["avx512_misc"]] <- c("vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]")
-
-    # exec_unit_instructions[["fp_div"]] <- c(exec_unit_instructions[["fp_div"]], exec_unit_instructions[["fp_div_fast"]])
-    # exec_unit_instructions[["fp_div_fast"]] <- NULL
-
-    ## Note: I am unsure how to categorise dppd instruction. My data suggest low-cost, but Agner claims 13 cycles.
-    exec_unit_instructions[["fp_dppd"]] <- c("[v]?dppd")
-    ## ... however, I do not have time to figure this out, so put dppd back into 'fp_add':
-    exec_unit_instructions[["fp_add"]] <- c(exec_unit_instructions[["fp_add"]], exec_unit_instructions[["fp_dppd"]])
-    exec_unit_instructions[["fp_dppd"]] <- NULL
+    # exec_unit_instructions[["alu"]] <- c("loop", "cmp", "inc", "j.*", "lea", "add", "mov", "movslq", "movap*", "sar", "movdq.*", "sh[rl]", "nop", "movzbl", "xor")
+    # # exec_unit_instructions[["simd_log"]] <- c("vxorpd", "vmovq")
+    # # exec_unit_instructions[["simd_alu"]] <- c("vpaddd", "vpmulld")
+    # exec_unit_instructions[["simd_alu"]] <- c("[v]?pand[d]?", "vandps", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128")
+    # exec_unit_instructions[["simd_shuffle"]] <- c("[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*")
+    # exec_unit_instructions[["fp_add"]] <- c("[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "vmax[sp]d")
+    # exec_unit_instructions[["fp_mul"]] <- c("mulsd", "[v]?mul[sp]d", "vf[n]?m[as].*")
+    # exec_unit_instructions[["fp_div"]] <- c("[v]?div[sp]d", "[v]?sqrt[sp]d")
+    # exec_unit_instructions[["fp_div_fast"]] <- c("vrcp.*", "vrsqrt14pd", "vrsqrt28[sp]d")
+    # exec_unit_instructions[["fp_mov"]] <- c("[v]?movd", "[v]?movsd", "[v]?movup[sd]", "[v]?movhp[sd]", "[v]?movap[sd]")
+    # exec_unit_instructions[["avx512_alu"]] <- c("vpxorq", "vptestm.*", "kandw", "kandn.*", "knot.*", "kxorw", "kxnorw")
+    # exec_unit_instructions[["avx512_shuffle"]] <- c("valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw")
+    # exec_unit_instructions[["avx512_misc"]] <- c("vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]")
+    exec_unit_mapping_filepath <- file.path(script_dirpath, "Backend", "insn_eu_mapping.csv")
+    exec_unit_mapping <- read.csv(exec_unit_mapping_filepath)
+    exec_unit_mapping[,"instruction"] <- as.character(exec_unit_mapping[,"instruction"])
+    exec_unit_mapping[,"exec_unit"] <- as.character(exec_unit_mapping[,"exec_unit"])
+    for (eu in unique(exec_unit_mapping[,"exec_unit"])) {
+        exec_unit_instructions[[eu]] <- c()
+    }
+    for (i in 1:nrow(exec_unit_mapping)) {
+        insn <- exec_unit_mapping[i,"instruction"]
+        eu <- exec_unit_mapping[i,"exec_unit"]
+        if (eu %in% names(exec_unit_instructions)) {
+            exec_unit_instructions[[eu]] <- c(exec_unit_instructions[[eu]], insn)
+        } else {
+            exec_unit_instructions[[eu]] <- c(insn)
+        }
+    }
+    ## Dot product instructions use two exec units: fp_mul and fp_shuffle, but my model requires a 
+    ## mapping to one so use fp_mul:
+    exec_unit_instructions[["fp_mul"]] <- c(exec_unit_instructions[["fp_mul"]], exec_unit_instructions[["fp_dpp"]])
+    exec_unit_instructions[["fp_dpp"]] <- NULL
 
     exec_units <- names(exec_unit_instructions)
 
@@ -206,14 +217,14 @@ categorise_instructions <- function(ic) {
         }
     }
 
-    ## Current Intel documentation does not describe how AVX512 instructions are scheduled to 
-    ## execution ports, so for now merge with other categories:
-    ic["eu.simd_alu"] <- ic["eu.simd_alu"] + ic["eu.avx512_alu"]
-    ic["eu.avx512_alu"] <- NULL
-    ic["eu.simd_shuffle"] <- ic["eu.simd_shuffle"] + ic["eu.avx512_shuffle"]
-    ic["eu.avx512_shuffle"] <- NULL
-    ic["eu.fp_mov"] <- ic["eu.fp_mov"] + ic["eu.avx512_misc"]
-    ic["eu.avx512_misc"] <- NULL
+    # ## Current Intel documentation does not describe how AVX512 instructions are scheduled to 
+    # ## execution ports, so for now merge with other categories:
+    # ic["eu.simd_alu"] <- ic["eu.simd_alu"] + ic["eu.avx512_alu"]
+    # ic["eu.avx512_alu"] <- NULL
+    # ic["eu.simd_shuffle"] <- ic["eu.simd_shuffle"] + ic["eu.avx512_shuffle"]
+    # ic["eu.avx512_shuffle"] <- NULL
+    # ic["eu.fp_mov"] <- ic["eu.fp_mov"] + ic["eu.avx512_misc"]
+    # ic["eu.avx512_misc"] <- NULL
 
     return(ic)
 }
@@ -240,6 +251,26 @@ if ("CC.version" %in% names(ic)) {
 }
 ic$kernel <- as.character(ic$kernel)
 ic[ic$kernel=="compute_flux_edge", "kernel"] <- "flux"
+
+# Separate load counts into 2 categories: loads to restore a register spill, and loads from main memory
+ic_flux <- ic[ic$kernel=="flux",]
+ic_rw   <- ic[ic$kernel=="indirect_rw",]
+for (cn in exec_unit_colnames) {
+    ic_rw[,cn] <- NULL
+}
+for (cn in mem_event_colnames) {
+    ic_rw <- rename_col(ic_rw, cn, paste0(cn, ".rw"))
+}
+ic_rw$kernel <- NULL
+ic_flux <- merge(ic_flux, ic_rw)
+ic_flux[,"mem.spills"] <- ic_flux[,"mem.loads"] - ic_flux[,"mem.loads.rw"]
+ic_flux[,"mem.loads"] <- ic_flux[,"mem.loads.rw"]
+ic_flux[,"mem.loads.rw"] <- NULL
+ic_flux[,"mem.stores.rw"] <- NULL
+ic_rw   <- ic[ic$kernel=="indirect_rw",]
+ic_rw[,"mem.spills"] <- 0
+ic <- rbind(ic_flux, ic_rw)
+mem_event_colnames <- c(mem_event_colnames, "mem.spills")
 
 ic <- preprocess_input_csv(ic)
 # write.csv(ic, "instruction-counts.categorised.csv", row.names=FALSE)
@@ -287,7 +318,8 @@ if (nrow(loop_niters_data)==0) {
 
 ## Discard unnecessary PAPI events:
 # necessary_papi_events <- c("PAPI_TOT_CYC", "PAPI_TOT_CYC_MAX", "PAPI_TOT_INS")
-necessary_papi_events <- c("PAPI_TOT_CYC", "PAPI_TOT_CYC_MAX", "PAPI_TOT_INS", "PAPI_TOT_INS_MAX")
+# necessary_papi_events <- c("PAPI_TOT_CYC", "PAPI_TOT_CYC_MAX", "PAPI_TOT_INS", "PAPI_TOT_INS_MAX")
+necessary_papi_events <- c("PAPI_TOT_CYC_MEAN", "PAPI_TOT_INS_MEAN")
 for (pe in necessary_papi_events) {
     if (!(pe %in% papi_counter_names)) {
         stop(paste0("ERROR: Event '", pe, "' not in papi data csv."))
@@ -374,10 +406,12 @@ perf_data <- split_col(perf_data, "var_id")
 # if ("SSE42" %in% perf_data$Instruction.set) {
 #     perf_data <- perf_data[perf_data$Instruction.set=="SSE42",]
 # }
-if ("level" %in% names(perf_data)) {
-    perf_data <- perf_data[perf_data$level==0,]
-    perf_data$level <- NULL
-}
+# if ("level" %in% names(perf_data)) {
+#     # perf_data <- perf_data[perf_data$level==0,]
+#     # perf_data <- perf_data[perf_data$level==1,]
+#     # perf_data$level <- NULL
+#     perf_data <- perf_data[perf_data$level<2,]
+# }
 if (nrow(perf_data)==0) {
     stop("perf_data is empty")
 }
@@ -409,8 +443,8 @@ perf_data$PAPI_TOT_INS.expected <- 0
 for (eu_col in eu_colnames) {
     perf_data$PAPI_TOT_INS.expected <- (perf_data[,eu_col] * perf_data[,"niters"]) + perf_data$PAPI_TOT_INS.expected
 }
-# perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS / perf_data$niters, digits=1)
-perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS_MAX / perf_data$niters, digits=1)
+# perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS_MAX / perf_data$niters, digits=1)
+perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS_MEAN / perf_data$niters, digits=1)
 perf_data$PAPI_TOT_INS.expected_piter <- round(perf_data$PAPI_TOT_INS.expected / perf_data$niters, digits=1)
 perf_data$PAPI_TOT_INS.eu_diff <- perf_data$PAPI_TOT_INS.piter - perf_data$PAPI_TOT_INS.expected_piter
 ## My handling of loop unrolling is almost perfect but not quite, so allow 
@@ -440,7 +474,8 @@ for (col in c("Num.threads")) {
     }
 }
 ## Update: focus on predicting grind time
-perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC_MAX / perf_data$niters
+# perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC_MAX / perf_data$niters
+perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC_MEAN / perf_data$niters
 perf_data$wg_sec    <- perf_data$runtime / perf_data$niters
 
 # cpu <- infer_run_value("CPU", raw_source_data_dirpath)
@@ -535,8 +570,15 @@ perf_data[,"eu.fp_div_fast"] <- NULL
 ## seen compiler generate a loop that uses both. It either selects high-precision 
 ## accurate divs/sqrts, or it selects the approximation versions.
 
-perf_data[,"eu.fp_mov"] <- perf_data[,"eu.fp_mov"] + perf_data[,"eu.simd_shuffle"]
-perf_data[,"eu.simd_shuffle"] <- NULL
+# perf_data[,"eu.fp_mov"] <- perf_data[,"eu.fp_mov"] + perf_data[,"eu.simd_shuffle"]
+# perf_data[,"eu.simd_shuffle"] <- NULL
+
+if ("eu.load" %in% names(perf_data)) {
+    ## This category only exists to ensure all instruction are accounted for. 
+    ## I will have already counted memory loads separately, so do not need 
+    ## this category.
+    perf_data[,"eu.load"] <- NULL
+}
 
 # # ## Remove instruction categories that should have no impact:
 # perf_data[,"eu.alu"] <- NULL
@@ -544,7 +586,6 @@ perf_data[,"eu.simd_shuffle"] <- NULL
 # perf_data[,"eu.stores"] <- NULL
 # perf_data[,"eu.fp_mov"] <- NULL
 # perf_data[,"eu.simd_shuffle"] <- NULL
-# perf_data[,"eu.loads"] <- NULL
 
 eu_and_mem_colnames <- intersect(names(perf_data), c(exec_unit_colnames, mem_event_colnames))
 eu_colnames <- intersect(names(perf_data), c(exec_unit_colnames))
@@ -602,6 +643,8 @@ for (eu_col in eu_and_mem_colnames) {
 }
 lin_systems_relative <- lin_systems_relative[lin_systems_relative$drop.sum != 0,]
 lin_systems_relative$drop.sum <- NULL
+
+# write.csv(lin_systems_relative, "lin_systems_relative.csv", row.names=FALSE)
 
 #################################################################################
 ## Begin model fitting and prediction:
@@ -738,9 +781,11 @@ for (var_id in var_vals) {
 
     var_perf_data <- perf_data[perf_data$var_id==var_id,]
     var_perf_data$var_id <- NULL
-    mini_cycles <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="flux"),"PAPI_TOT_CYC"]
+    # mini_cycles <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="flux"),"PAPI_TOT_CYC"]
+    mini_cycles <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="flux"),"PAPI_TOT_CYC_MEAN"]
     mini_niters <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="flux"),"niters"]
-    rw_cycles   <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="indirect_rw"),"PAPI_TOT_CYC"]
+    # rw_cycles   <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="indirect_rw"),"PAPI_TOT_CYC"]
+    rw_cycles   <- var_perf_data[(var_perf_data$Flux.variant=="Normal")&(var_perf_data$kernel=="indirect_rw"),"PAPI_TOT_CYC_MEAN"]
     #######################################################
     ## Append this modelling to main data frame:
     if (is.null(cpi_estimates)) {
@@ -800,4 +845,4 @@ write.csv(cpi_estimates, projections_filename, row.names=FALSE)
 # write.csv(mini_wg_cycles, mini_wg_cycles_filename, row.names=FALSE)
 
 ## Cleanup:
-system(paste("rm -r", "Modelling"))
+# system(paste("rm -r", "Modelling"))

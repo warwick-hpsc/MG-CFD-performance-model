@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
-import re
+import re, os
 from sets import Set
+
+utils_script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
 class SupportedArchitectures:
   UNKNOWN = 0
@@ -14,17 +16,18 @@ class SupportedArchitectures:
   WESTMERE = 7
 
 exec_unit_instructions = {}
-exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
-exec_unit_instructions["simd_alu"] = ["[v]?pand[d]?", "[v]?andp[sd]", "[v]?xorp.*", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128"]
-exec_unit_instructions["simd_shuffle"] = ["[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*", "vzeroupper"]
-exec_unit_instructions["fp_add"] = ["[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "[v]?dppd", "[v]?max[sp]d", "[v]?min[sp]d", "[v]?comisd"]
-exec_unit_instructions["fp_mul"] = ["mulsd", "[v]?mul[sp]d", "vf[n]?m[as].*"]
-exec_unit_instructions["fp_div"] = ["[v]?div[sp]d", "[v]?sqrt[sp]d"]
-exec_unit_instructions["fp_div_fast"] = ["vrcp.*", "vrsqrt14pd", "vrsqrt28[sp]d"]
-exec_unit_instructions["fp_mov"] = ["[v]?movd", "[v]?movsd", "[v]?movup[sd]", "[v]?movhp[sd]", "[v]?movap[sd]"]
-exec_unit_instructions["avx512_alu"] = ["vpxorq", "vptestm.*", "kandw", "kandn.*", "knot.*", "kxorw", "kxnorw"]
-exec_unit_instructions["avx512_shuffle"] = ["valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw"]
-exec_unit_instructions["avx512_misc"] = ["vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]"]
+# exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
+# exec_unit_instructions["simd_alu"] = ["[v]?pand[d]?", "[v]?andp[sd]", "[v]?xorp.*", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128"]
+# exec_unit_instructions["simd_shuffle"] = ["[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*", "vzeroupper"]
+# exec_unit_instructions["fp_add"] = ["[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "[v]?dppd", "[v]?max[sp]d", "[v]?min[sp]d", "[v]?comisd"]
+# exec_unit_instructions["fp_mul"] = ["mulsd", "[v]?mul[sp]d", "vf[n]?m[as].*"]
+# exec_unit_instructions["fp_div"] = ["[v]?div[sp]d", "[v]?sqrt[sp]d"]
+# exec_unit_instructions["fp_div_fast"] = ["vrcp.*", "vrsqrt14pd", "vrsqrt28[sp]d"]
+# exec_unit_instructions["fp_mov"] = ["[v]?movd", "[v]?movsd", "[v]?movup[sd]", "[v]?movhp[sd]", "[v]?movap[sd]"]
+# exec_unit_instructions["avx512_alu"] = ["vpxorq", "vptestm.*", "kandw", "kandn.*", "knot.*", "kxorw", "kxnorw"]
+# exec_unit_instructions["avx512_shuffle"] = ["valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw"]
+# exec_unit_instructions["avx512_misc"] = ["vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]"]
+
 exec_units = exec_unit_instructions.keys()
 
 insignificant_instructions = ["push", "pushq", "pop", "popq", "xor", "xorl", "sub", "subq", "retq", "testb", "and"]
@@ -33,6 +36,14 @@ class UnknownInstruction(Exception):
   def __init__(self, insn_name, occurence_count):
     message = "No exec unit found for insn '{0}' which occurs {1} times".format(insn_name, occurence_count)
     super(UnknownInstruction, self).__init__(message)
+
+def load_insn_eu_mapping():
+  exec_unit_mapping_filepath = os.path.join(utils_script_dirpath, "Backend", "insn_eu_mapping.csv")
+  exec_unit_mapping = pd.read_csv(exec_unit_mapping_filepath)
+  print(exec_unit_mapping)
+
+load_insn_eu_mapping()
+quit()
 
 def get_meta_coef_names(conf):
     meta_coef_names = []
@@ -258,12 +269,12 @@ def aggregate_across_instruction_sets(eu_cpis):
 
     mem_cpis_certain = mem_cpis[mem_cpis[mem_cat] != 1.0]
     mem_cpis_certain_grp = mem_cpis_certain.groupby(id_cats, as_index=False)
-    mem_cpis_certain_means = mem_cpis_certain_grp.mean()
+    mem_cpis_means = mem_cpis_certain_grp.mean()
 
     ## For runs where the modelling was unable to determine CPI, bring 
     ## back the filtered-out defaults:
-    if Set(id_groups) != Set(mem_cpis_certain_grp.groups.keys()):
-      lost_groups = Set(id_groups).difference(Set(mem_cpis_certain_grp.groups.keys()))
+    lost_groups = Set(id_groups).difference(Set(mem_cpis_certain_grp.groups.keys()))
+    if len(lost_groups) > 0:
       # # print("WARNING: After filtering-out load/store CPIs of 1.0, all data has been removed for these run ids: " + lost_groups.__str__())
       # print("WARNING: After filtering-out load/store CPIs of 1.0, all data has been removed for these run ids:")
       # print("     " + lost_groups.__str__())
