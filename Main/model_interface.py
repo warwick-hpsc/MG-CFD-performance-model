@@ -16,12 +16,19 @@ from Utils import *
 
 script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
+input_dirname = "Modelling"
+
 y_name = "wg_cycles"
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('-f', help='fit', action='store_true')
     parser.add_argument('-p', help='predict', action='store_true')
+    parser.add_argument('-d', help="Dirname")
     args = parser.parse_args()
+
+    global input_dirname
+    if not args.d is None:
+        input_dirname = args.d
 
     init_np()
 
@@ -29,22 +36,55 @@ def main(argv):
 
     if args.f:
         y, A = load_fitting_data()
+
+        if "do_prune_insn_classes" in conf and conf["do_prune_insn_classes"]:
+            # Drop columns with low value counts, insufficient data for CPI estimation 
+            # and leads to model over-fitting to these columns.
+            A_colnames = A.columns.values
+            # threshold = 5.0
+            threshold = 6.0
+            fast_insn_classes = ["eu.alu", "eu.simd_alu", "eu.fp_add", "eu.fp_mul"]
+            for i in fast_insn_classes:
+                if i in A.columns.values and A[i].mean() < threshold:
+                    A = A.drop(i, axis=1)
+
         am = ArchModel(conf, A)
         solution = find_solution(conf, A, y, am)
         write_solution(solution)
 
     elif args.p:
+
         coefs = load_coefficients()
+
+        if not conf["predict_perf_diff"]:
+            y, A = load_calibration_data()
+            am = ArchModel(conf, A)
+            y_predict = am.predict(coefs, do_print=False, return_bottleneck=False)
+            y_predict = y_predict[0]
+            idle_cycles = max(0.0, y[0] - y_predict)
+            # print("Calibration idle_cycles = {0}".format(idle_cycles))
+        else:
+            idle_cycles = 0.0
+
         y, A = load_predict_data()
         am = ArchModel(conf, A)
-        y_predict = am.predict(coefs)
+        # y_predict = am.predict(coefs)
+        y_predict, bottleneck = am.predict(coefs, do_print=False, return_bottleneck=True)
         y_predict = y_predict[0]
+        if idle_cycles != 0.0:
+            if bottleneck is None or bottleneck == "":
+                bottleneck = "idle_cycles={0}".format(round(idle_cycles))
+            else:
+                bottleneck += ";idle_cycles={0}".format(round(idle_cycles))
+
+        if not conf["predict_perf_diff"]:
+            y_predict += idle_cycles
 
         wg_cycles_reference = load_validation_data()
         if wg_cycles_reference != None:
             y_predict = max(y_predict, wg_cycles_reference["rw_cycles"])
         
-        write_prediction(conf, y_predict)
+        write_prediction(conf, y_predict, bottleneck)
 
 def init_np():
     float_formatter = lambda x: "%+.2E" % x
@@ -56,11 +96,14 @@ def init_np():
     np.random.seed(65432)
 
 def init_conf():
-    conf_filepath = os.path.join("Modelling", "insn_model_conf.csv")
+    conf_filepath = os.path.join(input_dirname, "insn_model_conf.csv")
 
     ## Model config:
     conf = {}
     conf["do_spill_penalty"] = False
+    conf["do_load_penalty"] = False
+    conf["do_prune_insn_classes"] = False
+    conf["do_ignore_loads_stores"] = False
     conf["cpu_is_skylake"] = False
     conf["cpu_is_broadwell"] = False
     conf["cpu_is_haswell"] = False
@@ -93,7 +136,10 @@ def load_data(filepath):
     coef_names = eu_names + mem_names
 
     ## Remove duplicate rows:
-    data = data.drop_duplicates(coef_names)
+    # data = data.drop_duplicates(coef_names)
+    ## Instead, use average across duplicate rows:
+    data_grp = data.groupby(coef_names)
+    data_mean = data_grp.mean().reset_index()
 
     y = data[y_name]
     A = data[coef_names]
@@ -101,15 +147,19 @@ def load_data(filepath):
     return y, A
 
 def load_fitting_data():
-    fitting_data_filepath = os.path.join("Modelling", "fitting_data.csv")
+    fitting_data_filepath = os.path.join(input_dirname, "fitting_data.csv")
     return load_data(fitting_data_filepath)
 
 def load_predict_data():
-    filepath = os.path.join("Modelling", "prediction_data.csv")
+    filepath = os.path.join(input_dirname, "prediction_data.csv")
+    return load_data(filepath)
+
+def load_calibration_data():
+    filepath = os.path.join(input_dirname, "calibration_data.csv")
     return load_data(filepath)
 
 def load_validation_data():
-    filepath = os.path.join("Modelling", "validate_prediction_data.csv")
+    filepath = os.path.join(input_dirname, "validate_prediction_data.csv")
     if os.path.isfile(filepath):
         data = pd.read_csv(filepath, header=0)
         
@@ -124,23 +174,30 @@ def find_solution(conf, A, y, am):
 
     ## Measure model error against fitting data:
     y_model = am.apply_model(coef_final_estimate, get_meta_coefs(conf, coef_final_estimate))
-    y_error = [ b-a for a,b in zip(y, y_model)]
-    # print("y_error = {0}".format(y_error))
-    y_error_pct = [ float(e)/a for e,a in zip(y_error, y)]
+    y_error = y_model-y.values
+    y_error_pct = np.divide(y_error, y)
     print("y_error_pct:")
     print(["{0}%".format(round(100.0*p, 1)) for p in y_error_pct])
-    y_error_sum = s.calc_model_error_sum(coef_final_estimate)
-    print("y_error_sum = {0}".format(y_error_sum))
+    # y_error_sum = s.calc_model_error_sum(coef_final_estimate)
+    # print("y_error_sum = {0}".format(y_error_sum))
 
     coef_names = s.get_coef_names()
     solution_dict = {}
     for i in range(len(coef_names)):
         solution_dict[coef_names[i]] = coef_final_estimate[i]
+
+    sum_error_pct = np.absolute(y_error).sum() / y.values.sum()
+    solution_dict["sum_error_pct"] = sum_error_pct
+
+    wc_idx = np.argmax(np.absolute(y_error))
+    wc_error_pct = abs(y_error[wc_idx] / y.values[wc_idx])
+    solution_dict["worst_error_pct"] = wc_error_pct
+
     return solution_dict
 
 
 def write_solution(coef_final_estimate):
-    solution_filepath = os.path.join("Modelling", "solution.csv")
+    solution_filepath = os.path.join(input_dirname, "solution.csv")
     if os.path.exists(solution_filepath):
         os.remove(solution_filepath)
 
@@ -151,8 +208,8 @@ def write_solution(coef_final_estimate):
             cpi = round(coef_final_estimate[k], 4)
             solution_file.write("{0},{1}\n".format(k, cpi))
 
-def write_prediction(conf, cycles_prediction):
-    filepath = os.path.join("Modelling", "prediction.csv")
+def write_prediction(conf, cycles_prediction, bottleneck=None):
+    filepath = os.path.join(input_dirname, "prediction.csv")
     if os.path.exists(filepath):
         os.remove(filepath)
 
@@ -176,12 +233,16 @@ def write_prediction(conf, cycles_prediction):
         header += ",error_pct"
         data_line += ",{0}".format(error_pct)
 
+    if not bottleneck is None:
+        header += ",bottleneck"
+        data_line += ",{0}".format(bottleneck)
+
     with open(filepath, "w") as outfile:
         outfile.write(header + "\n")
         outfile.write(data_line + "\n")
 
 def load_coefficients():
-    filepath = os.path.join("Modelling", "solution.csv")
+    filepath = os.path.join(input_dirname, "solution.csv")
     if not os.path.exists(filepath):
         raise IOError("Cannot find solution file: " + filepath)
 
@@ -190,6 +251,7 @@ def load_coefficients():
         csv_reader = csv.reader(solution_file)
         for line in csv_reader:
             if line[1] == "cpi":
+                # Header line
                 pass
             else:
                 coef_name = line[0]
