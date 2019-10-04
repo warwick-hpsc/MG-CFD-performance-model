@@ -1,7 +1,11 @@
 import pandas as pd
 import numpy as np
-import re
+import re, os
 from sets import Set
+
+from pprint import pprint
+
+utils_script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
 class SupportedArchitectures:
   UNKNOWN = 0
@@ -13,31 +17,55 @@ class SupportedArchitectures:
   KNL = 6
   WESTMERE = 7
 
-exec_unit_instructions = {}
-exec_unit_instructions["alu"] = ["loop", "lea", "^j.*", "cmp", "inc", "add", "mov", "movslq", "movap*", "sar", "[v]?movdq.*", "sh[rl]", "nop", "movzbl"]
-exec_unit_instructions["simd_alu"] = ["[v]?pand[d]?", "[v]?andp[sd]", "[v]?xorp.*", "vpxor[d]?", "vmovq", "vmovdq.*", "[v]?paddd", "[v]?psubd", "[v]?pmulld", "vpinsrd", "[v]?punpck.*", "vextracti128"]
-exec_unit_instructions["simd_shuffle"] = ["[v]?unpck.*", "vinsertf128", "vperm.*", "vpgather[dq]d", "vgather[dq]pd", "pshufd", "vpblendmq", "vpmovsxdq", "vbroadcast.*", "[v]?pmovzx.*", "vzeroupper"]
-exec_unit_instructions["fp_add"] = ["[v]?add[sp]d", "[v]?sub[sp]d", "vpsubq", "[v]?dppd", "[v]?max[sp]d", "[v]?min[sp]d", "[v]?comisd"]
-exec_unit_instructions["fp_mul"] = ["mulsd", "[v]?mul[sp]d", "vf[n]?m[as].*"]
-exec_unit_instructions["fp_div"] = ["[v]?div[sp]d", "[v]?sqrt[sp]d"]
-exec_unit_instructions["fp_div_fast"] = ["vrcp.*", "vrsqrt14pd", "vrsqrt28[sp]d"]
-exec_unit_instructions["fp_mov"] = ["[v]?movd", "[v]?movsd", "[v]?movup[sd]", "[v]?movhp[sd]", "[v]?movap[sd]"]
-exec_unit_instructions["avx512_alu"] = ["vpxorq", "vptestm.*", "kandw", "kandn.*", "knot.*", "kxorw", "kxnorw"]
-exec_unit_instructions["avx512_shuffle"] = ["valign[dq]", "vscatter[dq]p[sd]", "vinserti64x4", "vpbroadcastm.*", "vpbroadcast[bwdq]", "kunpckbw"]
-exec_unit_instructions["avx512_misc"] = ["vfpclasspd", "vplzcnt[dq]", "vpconflictd", "vpternlog[dq]", "vfixupimm[sp]d", "kmov[wbqd]", "kshiftrw", "vgetexp[sp][sd]", "vgetmant[sp][sd]", "vscalef[sp][sd]"]
-exec_units = exec_unit_instructions.keys()
-
-insignificant_instructions = ["push", "pushq", "pop", "popq", "xor", "xorl", "sub", "subq", "retq", "testb", "and"]
-
 class UnknownInstruction(Exception):
   def __init__(self, insn_name, occurence_count):
     message = "No exec unit found for insn '{0}' which occurs {1} times".format(insn_name, occurence_count)
     super(UnknownInstruction, self).__init__(message)
 
+def safe_pd_filter(df, field, value):
+  if not field in df.columns.values:
+    print("WARNING: field '{0}' not in df".format(field))
+    return df
+
+  if isinstance(value, list):
+    if len(value) == 0:
+      raise Exception("safe_pd_filter() passed an empty list of values")
+    else:
+      f = df[field]==value[0]
+      for i in range(1,len(value)):
+        f = np.logical_or(f, df[field]==value[i])
+      df = df[f]
+  else:
+    df = df[df[field]==value]
+
+  if len(Set(df[field])) == 1:
+    df = df.drop(field, axis=1)
+
+  nrows = df.shape[0]
+  if nrows == 0:
+    raise Exception("No rows left after filter: '{0}' == '{1}'".format(field, value))
+  return df
+
+def load_insn_eu_mapping():
+  exec_unit_mapping_filepath = os.path.join(utils_script_dirpath, "Backend", "insn_eu_mapping.csv")
+  df = pd.read_csv(exec_unit_mapping_filepath)
+
+  exec_unit_mapping = {}
+  for index,row in df.iterrows():
+    eu = row["exec_unit"]
+    if not eu in exec_unit_mapping:
+      exec_unit_mapping[eu] = [row["instruction"]]
+    else:
+      exec_unit_mapping[eu].append(row["instruction"])
+
+  return exec_unit_mapping
+
 def get_meta_coef_names(conf):
     meta_coef_names = []
     if conf["do_spill_penalty"]:
         meta_coef_names.append("spill_penalty")
+    if conf["do_load_penalty"]:
+        meta_coef_names.append("load_penalty")
     return meta_coef_names
 
 def get_meta_coefs(conf, coefs):
@@ -72,13 +100,14 @@ def split_var_id_column(df):
   df = df.drop("var_id", axis=1)
   return df
 
-def map_insn_to_exec_unit(insn):
+def map_insn_to_exec_unit(insn, mapping):
+  exec_units = mapping.keys()
   for eu in exec_units:
-    if insn in exec_unit_instructions[eu]:
+    if insn in mapping[eu]:
       return eu
 
   for eu in exec_units:
-    for eu_insn in exec_unit_instructions[eu]:
+    for eu_insn in mapping[eu]:
       if re.match(eu_insn, insn):
         return eu
 
@@ -112,20 +141,21 @@ def instructions_tally_to_dict(tally_filepath):
     insn = row["insn"].lower()
     count = row["count"]
 
-    if insn in insignificant_instructions:
-      continue
-
     counts["insn."+insn] = count
   return counts
 
 def categorise_instructions_tally(tally_filepath):
-  print("Categorising instructions in file: " + tally_filepath)
+  # print("Categorising instructions in file: " + tally_filepath)
 
+  eu_mapping = load_insn_eu_mapping()
+  exec_units = eu_mapping.keys()
   eu_classes = ["eu."+eu for eu in exec_units]
 
   counts = {eu:0 for eu in eu_classes}
   counts["mem.loads"] = 0
   counts["mem.stores"] = 0
+  counts["mem.load_spills"] = 0
+  counts["mem.store_spills"] = 0
 
   tally = pd.read_csv(tally_filepath)
 
@@ -133,43 +163,37 @@ def categorise_instructions_tally(tally_filepath):
     insn = row["insn"].lower()
     count = row["count"]
 
-    if insn in insignificant_instructions:
-      continue
-
     if insn == "loads":
       counts["mem.loads"] += count
       continue
-    if insn == "stores":
+    elif insn == "stores":
       counts["mem.stores"] += count
       continue
+    elif insn == "load_spills":
+      counts["mem.load_spills"] += count
+      continue
+    elif insn == "store_spills":
+      counts["mem.store_spills"] += count
+      continue
 
-    eu = map_insn_to_exec_unit(insn)
-    exec_unit_found = eu != ""
-    if not exec_unit_found:
+    eu = map_insn_to_exec_unit(insn, eu_mapping)
+    if eu == "":
       raise UnknownInstruction(insn, count)
     counts["eu."+eu] += count
 
-  ## Current Intel documentation does not describe how AVX512 instructions are scheduled to 
-  ## execution ports, so for now merge with other categories:
-  counts["eu.simd_alu"] = counts["eu.simd_alu"] + counts["eu.avx512_alu"]
-  del counts["eu.avx512_alu"]
-  counts["eu.simd_shuffle"] = counts["eu.simd_shuffle"] + counts["eu.avx512_shuffle"]
-  del counts["eu.avx512_shuffle"]
-  counts["eu.fp_mov"] = counts["eu.fp_mov"] + counts["eu.avx512_misc"]
-  del counts["eu.avx512_misc"]
-
-  ## Further merging of categories for better model fitting:
-  counts["eu.fp_mov"] = counts["eu.fp_mov"] + counts["eu.simd_shuffle"]
-  del counts["eu.simd_shuffle"]
+  if "eu.DISCARD" in counts.keys():
+    del counts["eu.DISCARD"]
 
   return counts
 
 def categorise_aggregated_instructions_tally(tally_filepath):
-  print("Categorising aggregated instructions in file: " + tally_filepath)
+  # print("Categorising aggregated instructions in file: " + tally_filepath)
 
+  eu_mapping = load_insn_eu_mapping()
+  exec_units = eu_mapping.keys()
   eu_classes = ["eu."+eu for eu in exec_units]
 
-  insn_tally = pd.read_csv(tally_filepath)
+  insn_tally = pd.read_csv(tally_filepath, keep_default_na=False)
 
   insn_colnames = [c for c in insn_tally.columns.values if c.startswith("insn.")]
 
@@ -178,39 +202,53 @@ def categorise_aggregated_instructions_tally(tally_filepath):
     eu_tally[euc] = 0
   eu_tally["mem.loads"] = 0
   eu_tally["mem.stores"] = 0
+  # eu_tally["mem.spills"] = 0
+  eu_tally["mem.load_spills"] = 0
+  eu_tally["mem.store_spills"] = 0
 
   for insn_cn in insn_colnames:
     insn = insn_cn.split('.')[1].lower()
     count = insn_tally[insn_cn]
 
-    if insn in insignificant_instructions:
-      continue
-
     if insn == "loads":
       eu_tally["mem.loads"] += count
       continue
-    if insn == "stores":
+    elif insn == "stores":
       eu_tally["mem.stores"] += count
       continue
+    elif insn == "load_spills":
+      eu_tally["mem.load_spills"] += count
+      continue
+    elif insn == "store_spills":
+      eu_tally["mem.store_spills"] += count
+      continue
 
-    eu = map_insn_to_exec_unit(insn)
+    eu = map_insn_to_exec_unit(insn, eu_mapping)
     exec_unit_found = eu != ""
     if not exec_unit_found:
-      raise UnknownInstruction(insn, count)
+      raise UnknownInstruction(insn, count.values.max())
     eu_tally["eu."+eu] += count
 
-  ## Current Intel documentation does not describe how AVX512 instructions are scheduled to 
-  ## execution ports, so for now merge with other categories:
-  eu_tally["eu.simd_alu"] = eu_tally["eu.simd_alu"] + eu_tally["eu.avx512_alu"]
-  eu_tally = eu_tally.drop("eu.avx512_alu", axis=1)
-  eu_tally["eu.simd_shuffle"] = eu_tally["eu.simd_shuffle"] + eu_tally["eu.avx512_shuffle"]
-  eu_tally = eu_tally.drop("eu.avx512_shuffle", axis=1)
-  eu_tally["eu.fp_mov"] = eu_tally["eu.fp_mov"] + eu_tally["eu.avx512_misc"]
-  eu_tally = eu_tally.drop("eu.avx512_misc", axis=1)
+  if "eu.DISCARD" in eu_tally.keys():
+    del eu_tally["eu.DISCARD"]
 
-  ## Further merging of categories for better model fitting:
-  eu_tally["eu.fp_mov"] = eu_tally["eu.fp_mov"] + eu_tally["eu.simd_shuffle"]
-  eu_tally = eu_tally.drop("eu.simd_shuffle", axis=1)
+  if "kernel" in eu_tally.columns.values:
+    if "compute_flux_edge" in Set(eu_tally["kernel"]) and "indirect_rw" in Set(eu_tally["kernel"]):
+      ## Good, have enough data to distinguish between spill-induced L1 loads/stores and main memory loads/stores. 
+      ## Can address situations where assembly-loop-extractor failed to identify spills:
+      rw_data = safe_pd_filter(eu_tally, "kernel", "indirect_rw")
+      if rw_data.shape[0] == eu_tally[eu_tally["kernel"]=="compute_flux_edge"].shape[0]:
+        ## Safe to merge:
+        rw_data = rw_data.drop(columns=[c for c in rw_data.columns if c.startswith("eu.")])
+        rw_data = rw_data.rename(columns={c:c+".rw" for c in rw_data.columns if c.startswith("mem.")})
+        eu_tally = eu_tally.merge(rw_data)
+        f = eu_tally["mem.load_spills"]==0
+        eu_tally.loc[f,"mem.load_spills"] = eu_tally.loc[f,"mem.loads"] - eu_tally.loc[f,"mem.loads.rw"]
+        eu_tally.loc[f,"mem.loads"] = eu_tally.loc[f,"mem.loads.rw"]
+        f = eu_tally["mem.store_spills"]==0
+        eu_tally.loc[f,"mem.store_spills"] = eu_tally.loc[f,"mem.stores"] - eu_tally.loc[f,"mem.stores.rw"]
+        eu_tally.loc[f,"mem.stores"] = eu_tally.loc[f,"mem.stores.rw"]
+        eu_tally = eu_tally.drop(columns=[c for c in eu_tally.columns if c.endswith(".rw")])
 
   return eu_tally
 
@@ -257,13 +295,18 @@ def aggregate_across_instruction_sets(eu_cpis):
     id_groups = mem_cpis_grp.groups.keys()
 
     mem_cpis_certain = mem_cpis[mem_cpis[mem_cat] != 1.0]
-    mem_cpis_certain_grp = mem_cpis_certain.groupby(id_cats, as_index=False)
-    mem_cpis_certain_means = mem_cpis_certain_grp.mean()
+    if mem_cpis_certain.shape[0] == 0:
+      mem_cpis_means = None
+    else:
+      mem_cpis_certain_grp = mem_cpis_certain.groupby(id_cats, as_index=False)
+      mem_cpis_means = mem_cpis_certain_grp.mean()
 
     ## For runs where the modelling was unable to determine CPI, bring 
     ## back the filtered-out defaults:
-    if Set(id_groups) != Set(mem_cpis_certain_grp.groups.keys()):
-      lost_groups = Set(id_groups).difference(Set(mem_cpis_certain_grp.groups.keys()))
+    lost_groups = Set(id_groups)
+    if not mem_cpis_means is None:
+      lost_groups = lost_groups.difference(Set(mem_cpis_certain_grp.groups.keys()))
+    if len(lost_groups) > 0:
       # # print("WARNING: After filtering-out load/store CPIs of 1.0, all data has been removed for these run ids: " + lost_groups.__str__())
       # print("WARNING: After filtering-out load/store CPIs of 1.0, all data has been removed for these run ids:")
       # print("     " + lost_groups.__str__())
@@ -272,9 +315,28 @@ def aggregate_across_instruction_sets(eu_cpis):
         lost_cpis = mem_cpis.iloc[mem_cpis_grp.groups[lg]]
         lost_cpis_grp = lost_cpis.groupby(id_cats, as_index=False)
         lost_cpis_means = lost_cpis_grp.mean()
-        mem_cpis_means = mem_cpis_means.append(lost_cpis_means)
+        if mem_cpis_means is None:
+          mem_cpis_means = lost_cpis_means
+        else:
+          mem_cpis_means = mem_cpis_means.append(lost_cpis_means)
 
     ## Write back into eu_cpis:
     eu_cpis_agg = eu_cpis_agg.drop(mem_cat, axis=1).merge(mem_cpis_means)
+    if eu_cpis_agg.shape[0]==0:
+      print(mem_cpis_means)
+      raise Exception("Merge of eu_cpis_agg with mem_cpis_means failed")
   
   return eu_cpis_agg
+
+def pd_cartesian_merge(df1, df2):
+  merge_key = "_tmp"
+  while merge_key in df1.columns.values and merge_key in df2.columns.values:
+    merge_key += "x"
+
+  df1[merge_key] = 1
+  df2[merge_key] = 1
+  df = pd.merge(df1, df2, on=merge_key).drop(merge_key, axis=1)
+  # df.index = pd.MultiIndex.from_product((df1.index, df2.index))
+  df1.drop(merge_key, axis=1, inplace=True)
+  df2.drop(merge_key, axis=1, inplace=True)
+  return df

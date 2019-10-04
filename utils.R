@@ -46,7 +46,8 @@ get_var_col_names <- function(d, drop_nonvarying=FALSE) {
 
 rename_col <- function(D, oldname, newname) {
     if (!(oldname %in% names(D))) {
-        print(paste0("WARNING: Column '", oldname, "' not in data.frame, cannot rename it."))
+        # print(paste0("WARNING: Column '", oldname, "' not in data.frame, cannot rename it."))
+        stop(paste0("ERROR: Rename of column '", oldname, "' -> '", newname, "' failed, not in data.frame."))
         return(D)
     }
 
@@ -274,7 +275,7 @@ split_kmp_hw_subset <- function(d) {
 }
 
 reshape_data_cols <- function(D, kernels_to_retain) {
-    id_vars <- intersect(c("iflux.variant", "Flux.variant", "var_id", "PAPI.counter", "Num.threads", "Instruction.set"), names(D))
+    id_vars <- intersect(c("iflux.variant", "Flux.variant", "var_id", "PAPI.counter", "Num.threads", "Instruction.set", "CC"), names(D))
     data_vars <- setdiff(names(D), id_vars)
     if (length(data_vars) == 0) {
         stop("reshape_data_cols() called on DF with no data cols to melt.")

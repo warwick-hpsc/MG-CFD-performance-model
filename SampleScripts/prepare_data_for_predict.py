@@ -33,8 +33,8 @@ for c in perf_data.columns.values:
 	elif len(Set(perf_data[c])) == 1:
 		perf_data = perf_data.drop(c, axis=1)
 
-perf_data["GHz"] = perf_data["PAPI_TOT_CYC_MAX"] / 1e9 / perf_data["runtime"]
-perf_data["wg_cycles"] = perf_data["PAPI_TOT_CYC_MAX"] / perf_data["niters"]
+perf_data["GHz"] = perf_data["PAPI_TOT_CYC_MEAN"] / 1e9 / perf_data["runtime"]
+perf_data["wg_cycles"] = perf_data["PAPI_TOT_CYC_MEAN"] / perf_data["niters"]
 perf_data["wg"] = perf_data["wg_cycles"] / (perf_data["GHz"] * 1e9)
 
 perf_data.to_csv(out_data_filepath, index=False)

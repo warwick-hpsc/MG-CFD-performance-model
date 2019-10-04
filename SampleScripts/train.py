@@ -19,8 +19,28 @@ tdir = os.path.join(script_dirpath, "Training")
 if not os.path.isdir(tdir):
 	os.mkdir(tdir)
 
-for f in ["instruction-counts.mean.csv", "LoopNumIters.mean.csv", "PAPI.mean.csv", "Times.mean.csv"]:
+for f in ["PAPI.mean.csv", "Times.mean.csv"]:
 	shutil.copyfile(os.path.join(processed_performance_data_dirpath, f), os.path.join(tdir, f))
+
+insn_counts_filename = None
+for f in ["instruction-counts.mean.csv", "instruction-counts.csv"]:
+	if os.path.isfile(os.path.join(processed_performance_data_dirpath, f)):
+		insn_counts_filename = f
+		break
+if insn_counts_filename is None:
+	raise Exception("Cannot find aggregated instruction counts csv")
+f = insn_counts_filename
+shutil.copyfile(os.path.join(processed_performance_data_dirpath, f), os.path.join(tdir, f))
+
+loop_num_iters_filename = None
+for f in ["LoopNumIters.mean.csv", "LoopNumIters.csv"]:
+	if os.path.isfile(os.path.join(processed_performance_data_dirpath, f)):
+		loop_num_iters_filename = f
+		break
+if loop_num_iters_filename is None:
+	raise Exception("Cannot find aggregated LoopNumIters csv")
+f = loop_num_iters_filename
+shutil.copyfile(os.path.join(processed_performance_data_dirpath, f), os.path.join(tdir, f))
 
 os.chdir(tdir)
 subprocess.call(["Rscript", model_src_dirpath+"/train_model.R"])
