@@ -120,7 +120,7 @@ class ArchModel(object):
 
     def apply_model(self, x, do_print=False, verify=False, return_bottleneck=False):
         num_datapoints = self.A.shape[0]
-        indices = self.insn_indices
+        insn_indices = self.insn_indices
         conf = self.conf
 
         do_track_contributions = do_print or verify or return_bottleneck
@@ -154,17 +154,18 @@ class ArchModel(object):
         num_insn_coefs = len(x) - len(self.meta_coefs_names)
 
         x_insn_coefs = x[0:num_insn_coefs]
-        # if "mem.spills" in indices and "mem.loads" in indices:
+        # if "mem.spills" in insn_indices and "mem.loads" in insn_indices:
         #     ## Update: treat spill-loads same as memory-loads:
-        #     x_insn_coefs = np.append(x_insn_coefs, x_insn_coefs[indices["mem.loads"]])
+        #     x_insn_coefs = np.append(x_insn_coefs, x_insn_coefs[insn_indices["mem.loads"]])
         ## Update 2: spill CPI now added elsewhere
         ## Update 3: spill CPI only added elsewhere when predicting, not training:
-        if "mem.spills" in indices and (num_insn_coefs == (self.A.shape[1]-1)):
-            # Add coef for spills:
-            if "mem.loads" in indices:
-                x_insn_coefs = np.append(x_insn_coefs, x_insn_coefs[indices["mem.loads"]])
+        if "mem.spills" in insn_indices and (num_insn_coefs == (self.A.shape[1]-1)):
+            ## Do not have a CPI value for spills. Solve by using the CPI value of loads:
+            if "mem.loads" in insn_indices:
+                x_insn_coefs = np.append(x_insn_coefs, x_insn_coefs[insn_indices["mem.loads"]])
             else:
-                raise Exception("Need to add coef for mem.spills but coef for mem.loads is missing")
+                print(insn_indices)
+                raise Exception("Need to add CPI coef for mem.spills but coef for mem.loads is missing")
 
         x_insn_coefs = [x_insn_coefs] * num_datapoints
         y_insn_cycles = self.A.values*x_insn_coefs
@@ -178,8 +179,8 @@ class ArchModel(object):
         last_cycles = np.zeros(num_datapoints)
 
         ## AVX512 FP:
-        if "eu.avx512" in indices:
-            avx512_idx =  indices["eu.avx512"]
+        if "eu.avx512" in insn_indices:
+            avx512_idx =  insn_indices["eu.avx512"]
             avx512_cycles = y_insn_cycles[:,avx512_idx]
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,avx512_idx])
             avx512_cycles += penalty
@@ -193,8 +194,8 @@ class ArchModel(object):
             last_cycles = port_cycles.max(axis=1)
 
         ## FP divs:
-        if "eu.fp_div" in indices:
-            fp_div_idx =  indices["eu.fp_div"]
+        if "eu.fp_div" in insn_indices:
+            fp_div_idx =  insn_indices["eu.fp_div"]
             fp_div_cycles = y_insn_cycles[:,fp_div_idx] 
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_div_idx])
             fp_div_cycles += penalty
@@ -205,8 +206,8 @@ class ArchModel(object):
             walltime_cycles_divs = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
-        if "eu.fp_div_fast" in indices:
-            fp_div_fast_idx =  indices["eu.fp_div_fast"]
+        if "eu.fp_div_fast" in insn_indices:
+            fp_div_fast_idx =  insn_indices["eu.fp_div_fast"]
             fp_div_fast_cycles = y_insn_cycles[:,fp_div_fast_idx]
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_div_fast_idx])
             fp_div_fast_cycles += penalty
@@ -217,9 +218,20 @@ class ArchModel(object):
             walltime_cycles_divs_fast = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
+        ## FP shuffle:
+        if "eu.fp_shuffle" in insn_indices:
+            fp_shuf_idx = insn_indices["eu.fp_shuffle"]
+            fp_shuf_cycles = y_insn_cycles[:,fp_shuf_idx].copy()
+            penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_shuf_idx])
+            fp_shuf_cycles += penalty
+            self.allocate_cycles_to_ports(fp_shuf_cycles, port_cycles, self.fp_shuf_ports)
+        if do_track_contributions:
+            walltime_cycles_shuffles = np.subtract(port_cycles.max(axis=1), last_cycles)
+            last_cycles = port_cycles.max(axis=1)
+
         ## FP add:
-        if "eu.fp_add" in indices:
-            fp_add_idx = indices["eu.fp_add"]
+        if "eu.fp_add" in insn_indices:
+            fp_add_idx = insn_indices["eu.fp_add"]
             fp_add_cycles = y_insn_cycles[:,fp_add_idx].copy()
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_add_idx])
             fp_add_cycles += penalty
@@ -229,8 +241,8 @@ class ArchModel(object):
             else:
                 self.allocate_cycles_to_ports(fp_add_cycles, port_cycles, self.fp_add_ports)
         ## FP mult:
-        if "eu.fp_mul" in indices:
-            fp_mul_idx = indices["eu.fp_mul"]
+        if "eu.fp_mul" in insn_indices:
+            fp_mul_idx = insn_indices["eu.fp_mul"]
             fp_mul_cycles = y_insn_cycles[:,fp_mul_idx].copy()
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_mul_idx])
             fp_mul_cycles += penalty
@@ -244,8 +256,8 @@ class ArchModel(object):
             last_cycles = port_cycles.max(axis=1)
 
         ## FP FMA:
-        if "eu.fp_fma" in indices:
-            fp_fma_idx = indices["eu.fp_fma"]
+        if "eu.fp_fma" in insn_indices:
+            fp_fma_idx = insn_indices["eu.fp_fma"]
             fp_fma_cycles = y_insn_cycles[:,fp_fma_idx].copy()
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_fma_idx])
             fp_fma_cycles += penalty
@@ -258,20 +270,9 @@ class ArchModel(object):
             walltime_cycles_fma = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
-        ## FP shuffle:
-        if "eu.fp_shuffle" in indices:
-            fp_shuf_idx = indices["eu.fp_shuffle"]
-            fp_shuf_cycles = y_insn_cycles[:,fp_shuf_idx].copy()
-            penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_shuf_idx])
-            fp_shuf_cycles += penalty
-            self.allocate_cycles_to_ports(fp_shuf_cycles, port_cycles, self.fp_shuf_ports)
-        if do_track_contributions:
-            walltime_cycles_shuffles = np.subtract(port_cycles.max(axis=1), last_cycles)
-            last_cycles = port_cycles.max(axis=1)
-
         ## Vec ALU:
-        if "eu.simd_alu" in indices:
-            simd_alu_idx = indices["eu.simd_alu"]
+        if "eu.simd_alu" in insn_indices:
+            simd_alu_idx = insn_indices["eu.simd_alu"]
             simd_alu_cycles_remaining = y_insn_cycles[:,simd_alu_idx]
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,simd_alu_idx])
             simd_alu_cycles_remaining += penalty
@@ -290,8 +291,8 @@ class ArchModel(object):
             last_cycles = port_cycles.max(axis=1)
 
         ## ALU:
-        if "eu.alu" in indices:
-            alu_idx = indices["eu.alu"]
+        if "eu.alu" in insn_indices:
+            alu_idx = insn_indices["eu.alu"]
             alu_cycles_remaining = y_insn_cycles[:,alu_idx]
             penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,alu_idx])
             alu_cycles_remaining += penalty
@@ -306,23 +307,28 @@ class ArchModel(object):
                 walltime_cycles_store = np.zeros(num_datapoints)
                 walltime_cycles_load  = np.zeros(num_datapoints)
         else:
-
-            if "mem.stores" in indices:
-                stores_idx = indices["mem.stores"]
+            if "mem.stores" in insn_indices:
+                stores_idx = insn_indices["mem.stores"]
                 port_cycles[:,self.store_port] += y_insn_cycles[:,stores_idx]
             if do_track_contributions:
                 walltime_cycles_store = np.subtract(port_cycles.max(axis=1), last_cycles)
                 last_cycles = port_cycles.max(axis=1)
 
-            if "mem.loads" in indices:
-                loads_idx = indices["mem.loads"]
+            if "mem.loads" in insn_indices:
+                loads_idx = insn_indices["mem.loads"]
                 self.allocate_cycles_to_ports(y_insn_cycles[:,loads_idx], port_cycles, self.load_ports)
-            if "mem.spills" in indices:
-                spills_idx = indices["mem.spills"]
+            if do_track_contributions:
+                ## UPDATE: distinguish between spills and memory-loads:
+                walltime_cycles_load = np.subtract(port_cycles.max(axis=1), last_cycles)
+                last_cycles = port_cycles.max(axis=1)
+            if "mem.spills" in insn_indices:
+                spills_idx = insn_indices["mem.spills"]
                 self.allocate_cycles_to_ports(y_insn_cycles[:,spills_idx], port_cycles, self.spill_ports)
             if do_track_contributions:
-                ## treat spills same as mem.loads:
-                walltime_cycles_load = np.subtract(port_cycles.max(axis=1), last_cycles)
+                # ## treat spills same as mem.loads:
+                # walltime_cycles_load = np.subtract(port_cycles.max(axis=1), last_cycles)
+                ## UPDATE: distinguish between spills and memory-loads:
+                walltime_cycles_spills = np.subtract(port_cycles.max(axis=1), last_cycles)
                 last_cycles = port_cycles.max(axis=1)
 
         y_model = port_cycles.max(axis=1)
@@ -334,115 +340,150 @@ class ArchModel(object):
             if do_print and verify:
                 print("Verifying")
 
-            do_contribute = [True] * num_insn_coefs
-
-            bottleneck = None
+            do_contribute = {i:False for i in insn_indices.keys()}
+            bottleneck = np.array([None] * self.A.shape[0])
 
             if bool(np.any(walltime_cycles_avx512 != np.zeros(len(walltime_cycles_avx512)))):
                 if do_print:
                     print("AVX512 FP | {0}".format(walltime_cycles_avx512))
-                if "eu.avx512" in indices:
-                    do_contribute[indices["eu.avx512"]] = True
-                    bottleneck = "eu.avx512"
-            else:
-                if "eu.avx512" in indices:
-                    do_contribute[indices["eu.avx512"]] = False
+                if "eu.avx512" in insn_indices:
+                    do_contribute["eu.avx512"] = True
+                    p = walltime_cycles_avx512 / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "avx512-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if bool(np.any(walltime_cycles_divs != np.zeros(len(walltime_cycles_divs)))):
                 if do_print:
                     print("DIVS      | {0}".format(walltime_cycles_divs))
-                # if "eu.fp_div" in indices:
-                do_contribute[indices["eu.fp_div"]] = True
-                bottleneck = "eu.fp_div"
-            else:
-                if "eu.fp_div" in indices:
-                    do_contribute[indices["eu.fp_div"]] = False
+                do_contribute["eu.fp_div"] = True
+                p = walltime_cycles_divs / y_model
+                p = np.round(p*100.0, 0)
+                bottleneck[bottleneck!=None] += ";"
+                bottleneck[bottleneck==None] = ""
+                bottleneck += "fp_div-"
+                bottleneck += ["{0}".format(i) for i in p]
+                bottleneck += "%"
 
             if bool(np.any(walltime_cycles_divs_fast != np.zeros(len(walltime_cycles_divs_fast)))):
                 if do_print:
                     print("DIVS(fast) | {0}".format(walltime_cycles_divs))
-                # if "eu.fp_div_fast" in indices:
-                do_contribute[indices["eu.fp_div_fast"]] = True
-                bottleneck = "eu.fp_div_fast"
-            else:
-                if "eu.fp_div_fast" in indices:
-                    do_contribute[indices["eu.fp_div_fast"]] = False
-
-            if bool(np.any(walltime_cycles_fp != np.zeros(len(walltime_cycles_fp)))):
-                if do_print:
-                    print("FP        | {0}".format(walltime_cycles_fp))
-                if "eu.fp_add" in indices:
-                    do_contribute[indices["eu.fp_add"]] = True
-                    bottleneck = "eu.fp"
-                if "eu.fp_mul" in indices:
-                    do_contribute[indices["eu.fp_mul"]] = True
-                    bottleneck = "eu.fp"
-            else:
-                if "eu.fp_add" in indices:
-                    do_contribute[indices["eu.fp_add"]] = False
-                if "eu.fp_mul" in indices:
-                    do_contribute[indices["eu.fp_mul"]] = False
-
-            if bool(np.any(walltime_cycles_fma != np.zeros(len(walltime_cycles_fma)))):
-                if do_print:
-                    print("FP FMA    | {0}".format(walltime_cycles_fma))
-                if "eu.fp_fma" in indices:
-                    do_contribute[indices["eu.fp_fma"]] = True
-                    bottleneck = "eu.fp"
-            else:
-                if "eu.fp_fma" in indices:
-                    do_contribute[indices["eu.fp_fma"]] = False
+                do_contribute["eu.fp_div_fast"] = True
+                p = walltime_cycles_divs_fast / y_model
+                p = np.round(p*100.0, 0)
+                bottleneck[bottleneck!=None] += ";"
+                bottleneck[bottleneck==None] = ""
+                bottleneck += "fp_div_fast-"
+                bottleneck += ["{0}".format(i) for i in p]
+                bottleneck += "%"
 
             if bool(np.any(walltime_cycles_shuffles != np.zeros(len(walltime_cycles_shuffles)))):
                 if do_print:
                     print("FP SHUF   | {0}".format(walltime_cycles_shuffles))
-                if "eu.fp_shuffle" in indices:
-                    do_contribute[indices["eu.fp_shuffle"]] = True
-                    bottleneck = "eu.fp_shuffle"
-            else:
-                if "eu.fp_shuffle" in indices:
-                    do_contribute[indices["eu.fp_shuffle"]] = False
+                if "eu.fp_shuffle" in insn_indices:
+                    do_contribute["eu.fp_shuffle"] = True
+                    p = walltime_cycles_shuffles / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "fp_shuf-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
+
+            if bool(np.any(walltime_cycles_fp != np.zeros(len(walltime_cycles_fp)))):
+                if do_print:
+                    print("FP        | {0}".format(walltime_cycles_fp))
+                if "eu.fp_add" in insn_indices:
+                    do_contribute["eu.fp_add"] = True
+                if "eu.fp_mul" in insn_indices:
+                    do_contribute["eu.fp_mul"] = True
+                p = walltime_cycles_fp / y_model
+                p = np.round(p*100.0, 0)
+                bottleneck[bottleneck!=None] += ";"
+                bottleneck[bottleneck==None] = ""
+                bottleneck += "fp-"
+                bottleneck += ["{0}".format(i) for i in p]
+                bottleneck += "%"
+
+            if bool(np.any(walltime_cycles_fma != np.zeros(len(walltime_cycles_fma)))):
+                if do_print:
+                    print("FP FMA    | {0}".format(walltime_cycles_fma))
+                if "eu.fp_fma" in insn_indices:
+                    do_contribute["eu.fp_fma"] = True
+                    p = walltime_cycles_fma / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "fp_fma-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if bool(np.any(walltime_cycles_simd_alu != np.zeros(len(walltime_cycles_simd_alu)))):
                 if do_print:
                     print("SIMD ALU  | {0}".format(walltime_cycles_simd_alu))
-                if "eu.simd_alu" in indices:
-                    do_contribute[indices["eu.simd_alu"]] = True
-                    bottleneck = "eu.simd_alu"
-            else:
-                if "eu.simd_alu" in indices:
-                    do_contribute[indices["eu.simd_alu"]] = False
+                if "eu.simd_alu" in insn_indices:
+                    do_contribute["eu.simd_alu"] = True
+                    p = walltime_cycles_simd_alu / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "simd_alu-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if bool(np.any(walltime_cycles_alu != np.zeros(len(walltime_cycles_alu)))):
                 if do_print:
                     print("ALU       | {0}".format(walltime_cycles_alu))
-                if "eu.alu" in indices:
-                    do_contribute[indices["eu.alu"]] = True
-                    bottleneck = "eu.alu"
-            else:
-                if "eu.alu" in indices:
-                    do_contribute[indices["eu.alu"]] = False
+                if "eu.alu" in insn_indices:
+                    do_contribute["eu.alu"] = True
+                    p = walltime_cycles_alu / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "alu-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if bool(np.any(walltime_cycles_store != np.zeros(len(walltime_cycles_store)))):
                 if do_print:
                     print("STORES    | {0}".format(walltime_cycles_store))
-                if "mem.stores" in indices:
-                    do_contribute[indices["mem.stores"]] = True
-                    bottleneck = "mem.stores"
-            else:
-                if "mem.stores" in indices:
-                    do_contribute[indices["mem.stores"]] = False
+                if "mem.stores" in insn_indices:
+                    do_contribute["mem.stores"] = True
+                    p = walltime_cycles_store / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "mem.wr-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if bool(np.any(walltime_cycles_load != np.zeros(len(walltime_cycles_load)))):
                 if do_print:
-                    # print("LOADS     | {0}".format(walltime_cycles_load))
-                    print("LD + SPILL| {0}".format(walltime_cycles_load))
-                if "mem.loads" in indices:
-                    do_contribute[indices["mem.loads"]] = True
-                    bottleneck = "mem.loads"
-            else:
-                if "mem.loads" in indices:
-                    do_contribute[indices["mem.loads"]] = False
+                    print("LOADS     | {0}".format(walltime_cycles_load))
+                if "mem.loads" in insn_indices:
+                    do_contribute["mem.loads"] = True
+                    p = walltime_cycles_load / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "mem.ld-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
+            if not conf["do_ignore_loads_stores"] and bool(np.any(walltime_cycles_spills != np.zeros(len(walltime_cycles_spills)))):
+                if do_print:
+                    print("SPILLS    | {0}".format(walltime_cycles_spills))
+                if "mem.spills" in insn_indices:
+                    do_contribute["mem.spills"] = True
+                    p = walltime_cycles_spills / y_model
+                    p = np.round(p*100.0, 0)
+                    bottleneck[bottleneck!=None] += ";"
+                    bottleneck[bottleneck==None] = ""
+                    bottleneck += "mem.spills-"
+                    bottleneck += ["{0}".format(i) for i in p]
+                    bottleneck += "%"
 
             if not bottleneck is None:
                 if conf["do_spill_penalty"] and meta_coefs["spill_penalty"] != 0.0:
@@ -452,11 +493,11 @@ class ArchModel(object):
 
             if do_print:
                 non_contributing_insns = []
-                for insn_name in indices:
-                    insn_idx = indices[insn_name]
+                for insn_name in insn_indices:
+                    insn_idx = insn_indices[insn_name]
                     if insn_idx >= num_insn_coefs:
                         continue
-                    if not do_contribute[insn_idx]:
+                    if not do_contribute[insn_name]:
                         # print("Insn '{0}' does not contribute to overall clock cycle consumption.".format(insn_name))
                         non_contributing_insns.append(insn_name)
                 if len(non_contributing_insns) > 0:
@@ -472,22 +513,25 @@ class ArchModel(object):
         return y_model
 
     def predict(self, coefs, do_print=True, return_bottleneck=True):
-        coefs_raw = []
+        cpi_values = []
         if type(coefs) is dict:
             for n in self.insn_names:
                 if n in coefs:
-                    coefs_raw.append(coefs[n])
+                    cpi_values.append(coefs[n])
                 elif n == "mem.spills" and "mem.loads" in coefs:
-                    coefs_raw.append(coefs["mem.loads"])
+                    cpi_values.append(coefs["mem.loads"])
+                else:
+                    # print("  WARNING: Do not have CPI value for insn '{0}', so using 1.0.".format(n))
+                    cpi_values.append(1.0)
             for n in self.meta_coefs_names:
                 if n in coefs:
-                    coefs_raw.append(coefs[n])
+                    cpi_values.append(coefs[n])
         else:
-            coefs_raw = coefs
+            cpi_values = coefs
 
         if return_bottleneck:
-            p, bottleneck = self.apply_model(coefs_raw, do_print=do_print, return_bottleneck=True)
+            p, bottleneck = self.apply_model(cpi_values, do_print=do_print, return_bottleneck=True)
             return p, bottleneck
         else:
-            p = self.apply_model(coefs_raw, do_print=do_print, return_bottleneck=False)
+            p = self.apply_model(cpi_values, do_print=do_print, return_bottleneck=False)
             return p

@@ -54,3 +54,16 @@ if not os.path.isdir(pdir):
 	os.mkdir(pdir)
 for f in ["cpi_estimates.csv"]:
 	shutil.copyfile(os.path.join("Training", f), os.path.join(pdir, f))
+
+# Prune cpi_estimates:
+cpi_estimates = pd.read_csv(os.path.join(pdir, "cpi_estimates.csv"))
+if "model_fitting_strategy" in cpi_estimates.columns.values:
+	cpi_estimates = cpi_estimates[cpi_estimates["model_fitting_strategy"]=="miniDifferences"]
+	if cpi_estimates.shape[0] == 0:
+		raise Exception("Filtering cpi_estimates.csv has removed all rows")
+if "do_spill_penalty" in cpi_estimates.columns.values:
+	cpi_estimates = cpi_estimates[cpi_estimates["do_spill_penalty"]==False]
+	if cpi_estimates.shape[0] == 0:
+		raise Exception("Filtering cpi_estimates.csv has removed all rows")
+cpi_estimates.to_csv(os.path.join(pdir, "cpi_estimates.csv"), index=False)
+

@@ -6,10 +6,18 @@ from sets import Set
 
 script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
+projection_model_dirpath = os.path.join(script_dirpath, "../", "Main")
+import imp
+imp.load_source('utils', os.path.join(projection_model_dirpath, "Utils.py"))
+from utils import *
+
 in_data_filepath = os.path.join(script_dirpath, "Training", "merged_performance_data.csv")
 out_data_filepath = os.path.join(script_dirpath, "Prediction", "prepared_performance_data.csv")
 
 perf_data = pd.read_csv(in_data_filepath)
+
+if "var_id" in perf_data.columns.values:
+	perf_data = split_var_id_column(perf_data)
 
 perf_data.columns = perf_data.columns.str.replace(' ', '.')
 filters = {}

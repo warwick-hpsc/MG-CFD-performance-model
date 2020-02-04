@@ -125,7 +125,7 @@ class Solver(object):
 			## higher, but the difference should be similar for each kernel, 
 			## as difference will be largely due to unstructured grid 
 			## accesses which are identical across variants.
-			## So, optimisation goal is for each prediction to differ by same amount:
+			## So, optimisation goal is for each prediction to have same absolute error:
 			idle_cycles = self.y.values[0] - y_model[0]
 			idle_cycles = max(idle_cycles, 0.0)
 			y_error -= idle_cycles
@@ -230,12 +230,11 @@ class Solver(object):
 
 		## Filter out coefficients that do not contribute to overall performance of 
 		## any run in fitting data:
-		(y_predict, do_contribute) = self.am.apply_model(solution, verify=True)
-		# (y_predict, do_contribute) = self.am.apply_model(solution, do_print=True, verify=True)
-		for i in range(len(do_contribute)):
+		(y_predict, do_contribute) = self.am.apply_model(solution, do_print=True, verify=True)
+		for i in range(len(self.coef_names)):
 			insn_name = self.coef_names[i]
 			cpi_estimate = solution[i]
-			if not do_contribute[i]:
+			if not do_contribute[insn_name]:
 				if cpi_estimate != self.insn_ranges[insn_name][0]:
 					print("Insn class '{0}' does not contribute to performance, but model has increased its value to '{1}' from minimum bound. This is unjustified. Resetting it to minimum.".format(insn_name, cpi_estimate))
 					solution[i] = self.insn_ranges[insn_name][0]

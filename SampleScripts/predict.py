@@ -8,9 +8,7 @@ script_dirpath = os.path.dirname(os.path.realpath(__file__))
 
 ## Dirpath to MG-CFD performance model:
 projection_model_dirpath = os.path.join(script_dirpath, "../", "Main")
-
 py_model_filepath = os.path.join(projection_model_dirpath, "model_interface.py")
-
 import imp
 imp.load_source('utils', os.path.join(projection_model_dirpath, "Utils.py"))
 from utils import *
@@ -19,15 +17,6 @@ from utils import *
 regen = True
 # regen = False
 
-class PredictionMethods:
-  Difference = 0
-  Absolute = 1
-
-## Predict the performance difference between mini-app and target loop:
-prediction_method = PredictionMethods.Difference
-## Predict total performance of the target loop, using mini-app performance to calibrate model:
-# prediction_method = PredictionMethods.Absolute
-
 ## Read in CPI estimates:
 cpi_estimates_fp = os.path.join(script_dirpath, "Prediction", "cpi_estimates.csv")
 if not os.path.exists(cpi_estimates_fp):
@@ -35,6 +24,9 @@ if not os.path.exists(cpi_estimates_fp):
 cpi_estimates = pd.read_csv(cpi_estimates_fp, keep_default_na=False)
 cpi_estimates = split_var_id_column(cpi_estimates)
 cpi_estimates = aggregate_across_instruction_sets(cpi_estimates)
+if "OpenMP" in cpi_estimates.columns.values:
+	cpi_estimates = cpi_estimates[cpi_estimates["OpenMP"]=="Off"]
+	cpi_estimates.drop("OpenMP", axis=1, inplace=True)
 
 ## Read in performance data:
 prepared_performance_data_fp = os.path.join(script_dirpath, "Prediction", "prepared_performance_data.csv")
@@ -44,15 +36,22 @@ mini_perf_data = pd.read_csv(prepared_performance_data_fp)
 mini_perf_data = mini_perf_data.rename(index=str, columns={"wg_cycles":"mini_wg_cycles"})
 
 ## Read in target kernel data:
-target_eu_counts_fp = os.path.join(script_dirpath, "Prediction", "target_eu_counts.csv")
+# target_eu_counts_fp = os.path.join(script_dirpath, "Prediction", "target_eu_counts.csv")
+target_eu_counts_fp = os.path.join(script_dirpath, "target_eu_counts.csv")
 if regen or not os.path.isfile(target_eu_counts_fp):
 	target_insn_counts_fp = os.path.join(script_dirpath, "target_insn_counts.csv")
-	target_eu_counts = categorise_aggregated_instructions_tally(target_insn_counts_fp)
-	if "eu.load" in target_eu_counts.keys():
-		## Can ignore load-related instructions (eg vmovsd) as I think they 
-		## map directly to just an actual memory load, which I already track.
-		del target_eu_counts["eu.load"]
-	target_eu_counts.to_csv(target_eu_counts_fp, index=False)
+	if os.path.isfile(target_insn_counts_fp):
+		target_eu_counts = categorise_aggregated_instructions_tally(target_insn_counts_fp)
+		if "eu.load" in target_eu_counts.keys():
+			## Can ignore load-related instructions (eg vmovsd) as I think they 
+			## map directly to just an actual memory load, which I already track.
+			del target_eu_counts["eu.load"]
+		target_eu_counts.to_csv(target_eu_counts_fp, index=False)
+	else:
+		if not os.path.isfile(target_eu_counts_fp):
+			raise Exception("Need 'target_eu_counts.csv' or 'target_insn_counts.csv'")
+		else:
+			target_eu_counts = pd.read_csv(target_eu_counts_fp)
 else:
 	target_eu_counts = pd.read_csv(target_eu_counts_fp)
 
@@ -67,59 +66,49 @@ cpu = mini_perf_data["CPU"][0]
 target_arch = cpu_string_to_arch(cpu)
 
 
+## Prepare kernel instruction counts:
 insn_cats = [i for i in target_eu_counts.columns.values if ("eu." in i or "mem." in i)]
-
-
-## Calculate differences in kernel instruction counts:
 mgcfd_eu_counts_colnames = list(Set(mini_perf_data.columns.values).intersection(target_eu_counts.columns.values))
-f = np.logical_and(mini_perf_data["Num.threads"]==1, mini_perf_data["kernel"]=="flux")
-f = np.logical_and(f, mini_perf_data["level"]==0)
-mgcfd_eu_counts = mini_perf_data.loc[f, mgcfd_eu_counts_colnames]
+f = np.logical_and(mini_perf_data["level"]==0, mini_perf_data["kernel"]=="flux")
+mgcfd_eu_counts = mini_perf_data[f]
+if "Num.threads" in mgcfd_eu_counts.columns.values:
+	mgcfd_eu_counts = mgcfd_eu_counts[mgcfd_eu_counts["Num.threads"]==1]
+	mgcfd_eu_counts.drop("Num.threads", axis=1, inplace=True)
+mgcfd_eu_counts  =  mgcfd_eu_counts[mgcfd_eu_counts_colnames]
 mgcfd_eu_counts  =  mgcfd_eu_counts.rename(index=str, columns={i:i+".mgcfd"  for i in insn_cats})
 target_eu_counts = target_eu_counts.rename(index=str, columns={i:i+".target" for i in insn_cats})
-insn_diffs = mgcfd_eu_counts.merge(target_eu_counts, validate="one_to_one")
-if insn_diffs.shape[0] == 0:
-	raise Exception("Merge of 'mgcfd_eu_counts' with 'target_eu_counts' produced empty DataFrame")
-for i in insn_cats:
-	insn_diffs[i] = insn_diffs[i+".target"] - insn_diffs[i+".mgcfd"]
-	# insn_diffs = insn_diffs.drop([i+".target", i+".mgcfd"],axis=1)
-## Modelling requires differences to be positive:
-insn_diffs['sum'] = insn_diffs[insn_cats].sum(axis=1)
-insn_diffs['target_more_expensive'] = insn_diffs[insn_cats].sum(axis=1) > 0
-insn_diffs.loc[np.logical_not(insn_diffs['target_more_expensive']), insn_cats] *= -1
-insn_diffs = insn_diffs.drop("sum", axis=1)
 
-
-mini_wg_cycles = mini_perf_data[["Instruction.set", "Num.threads", "kernel", "level", "mini_wg_cycles"]]
-mini_wg_cycles = mini_wg_cycles.pivot_table(index=["Instruction.set", "Num.threads", "level"], columns="kernel", values="mini_wg_cycles").reset_index()
+## Prepare empirical performance data:
+mini_wg_cycles_columns = Set(["Instruction.set", "Precise.FP", "Num.threads", "kernel", "level", "mini_wg_cycles"]).intersection(mini_perf_data.columns.values)
+mini_wg_cycles = mini_perf_data[list(mini_wg_cycles_columns)]
+mini_wg_cycles = mini_wg_cycles.pivot_table(index=list(mini_wg_cycles_columns.difference(["kernel", "mini_wg_cycles"])), columns="kernel", values="mini_wg_cycles").reset_index()
 mini_wg_cycles = mini_wg_cycles.rename(index=str, columns={"flux":"mini_wg_cycles"})
 mini_wg_cycles = mini_wg_cycles.rename(index=str, columns={"indirect_rw":"mini_wg_cycles_rw"})
 flux_wg_cycles = mini_wg_cycles.copy()
-flux_wg_cycles = flux_wg_cycles[flux_wg_cycles["Num.threads"]==1].drop(["Num.threads","mini_wg_cycles_rw"], axis=1)
+if "Num.threads" in flux_wg_cycles.columns.values:
+	flux_wg_cycles = flux_wg_cycles[flux_wg_cycles["Num.threads"]==1].drop(["Num.threads"], axis=1)
+flux_wg_cycles = flux_wg_cycles.drop("mini_wg_cycles_rw", axis=1)
 
-
-ghz_data = mini_perf_data[["Instruction.set", "Num.threads", "kernel", "GHz"]]
+ghz_data_columns = Set(["Instruction.set", "Precise.FP", "level", "Num.threads", "kernel", "GHz"]).intersection(mini_perf_data.columns.values)
+ghz_data = mini_perf_data[ghz_data_columns]
 kernels = Set(ghz_data["kernel"])
-ghz_data = ghz_data.pivot_table(index=["Instruction.set", "Num.threads"], columns="kernel", values="GHz").reset_index()
+# ghz_data = ghz_data.pivot_table(index=["Instruction.set", "Num.threads"], columns="kernel", values="GHz").reset_index()
+ghz_data = ghz_data.pivot_table(index=list(ghz_data_columns.difference(["kernel", "GHz"])), columns="kernel", values="GHz").reset_index()
 ghz_data = ghz_data.rename(index=str, columns={s:"ghz_"+s for s in kernels})
 
 
-## Merge together data:
-input_prediction_data = flux_wg_cycles.merge(cpi_estimates, validate="one_to_one")
+## Merge together data to form prediction dataset:
+input_prediction_data = flux_wg_cycles.merge(cpi_estimates)
 if input_prediction_data.shape[0]==0:
 	raise Exception("Merge of <mini_wg_cycles, cpi_estimates> produced empty DataFrame")
+if "Num.threads" in input_prediction_data.columns.values:
+	input_prediction_data = input_prediction_data[input_prediction_data["Num.threads"]==1]
+	input_prediction_data.drop("Num.threads", axis=1, inplace=True)
 input_prediction_data = input_prediction_data.rename(index=str, columns={i:i+".cpi" for i in insn_cats})
 eu_cpi_col_names = [i+".cpi" for i in insn_cats]
 
-
-if not "level" in insn_diffs.columns.values:
-	## Add a 'level' column to insn_diffs to pass validate check below:
-	insn_diffs = pd_cartesian_merge(insn_diffs, pd.DataFrame(data={"level":[0,1,2,3]}))
-input_prediction_data = input_prediction_data.merge(insn_diffs, validate="one_to_one")
-for i in insn_cats:
-	input_prediction_data = input_prediction_data.rename(index=str, columns={i:i+".diff"})
-eu_diff_col_names = [i+".diff" for i in insn_cats]
-
+input_prediction_data = input_prediction_data.merge(target_eu_counts)
+input_prediction_data = input_prediction_data.merge(mgcfd_eu_counts)
 input_prediction_data_fp = os.path.join(script_dirpath, "Prediction", "input_prediction_data.csv")
 input_prediction_data.to_csv(input_prediction_data_fp, index=False)
 
@@ -139,15 +128,12 @@ def generate_wg_cycles_predictions(input_prediction_data):
 
 	target_predictions = [0] * input_prediction_data.shape[0]
 
-	for i in range(input_prediction_data.shape[0]):
-		print("Predicting {0} of {1}".format(i+1, input_prediction_data.shape[0]))
+	for idx in range(input_prediction_data.shape[0]):
+		print("Predicting {0} of {1}".format(idx+1, input_prediction_data.shape[0]))
 
-		model_data = input_prediction_data.iloc[i]
+		model_data = input_prediction_data.iloc[idx]
 
-		if prediction_method == PredictionMethods.Difference:
-			insn_cats_nonzero = [insn_cat for insn_cat in insn_cats if model_data[insn_cat+".diff"] > 0]
-		elif prediction_method == PredictionMethods.Absolute:
-			insn_cats_nonzero = [insn_cat for insn_cat in insn_cats if model_data[insn_cat+".target"] > 0]
+		insn_cats_nonzero = [insn_cat for insn_cat in insn_cats if model_data[insn_cat+".target"] > 0]
 
 		## Write out target instruction counts:
 		pred_data_fp = os.path.join("Modelling", "prediction_data.csv")
@@ -158,28 +144,21 @@ def generate_wg_cycles_predictions(input_prediction_data):
 				header += ","
 				data_line += ","
 			header += insn_cat
-			if prediction_method == PredictionMethods.Difference:
-				data_line += "{0}".format(model_data[insn_cat+".diff"])
-			elif prediction_method == PredictionMethods.Absolute:
-				data_line += "{0}".format(model_data[insn_cat+".target"])
+			data_line += "{0}".format(model_data[insn_cat+".target"])
 		with open (pred_data_fp, "w") as pred_data_file:
 			pred_data_file.write(header+"\n")
 			pred_data_file.write(data_line+"\n")
 
-		if prediction_method == PredictionMethods.Absolute:
-			## Write out calibration data (ie known MG-CFD performance):
-			calib_data_fp = os.path.join("Modelling", "calibration_data.csv")
-			header = "wg_cycles"
-			data_line = "{0}".format(model_data["mini_wg_cycles"])
-			for insn_cat in insn_cats_nonzero:
-				if header != "":
-					header += ","
-					data_line += ","
-				header += insn_cat
-				data_line += "{0}".format(model_data[insn_cat+".mgcfd"])
-			with open (calib_data_fp, "w") as calib_data_file:
-				calib_data_file.write(header+"\n")
-				calib_data_file.write(data_line+"\n")
+		## Write out MG-CFD as calibration data:
+		calib_data_fp = os.path.join("Modelling", "calibration_data.csv")
+		header = "wg_cycles"
+		data_line = "{0}".format(model_data["mini_wg_cycles"])
+		header += ',' + ','.join(insn_cats_nonzero)
+		data_line += ',' + ','.join(["{0}".format(model_data[i+".mgcfd"]) for i in insn_cats_nonzero])
+		with open (calib_data_fp, "w") as calib_data_file:
+			calib_data_file.write(header+"\n")
+			calib_data_file.write(data_line+"\n")
+		header = "wg_cycles" + "," + ",".join(insn_cats_nonzero)
 
 		## Write out CPI estimates:
 		sol_data_fp = os.path.join("Modelling", "solution.csv")
@@ -198,6 +177,7 @@ def generate_wg_cycles_predictions(input_prediction_data):
 			SupportedArchitectures.HASWELL: "cpu_is_haswell", 
 			SupportedArchitectures.BROADWELL: "cpu_is_broadwell",
 			SupportedArchitectures.SKYLAKE: "cpu_is_skylake",
+			SupportedArchitectures.CASCADELAKE: "cpu_is_skylake",
 			SupportedArchitectures.KNL: "cpu_is_knl",
 			SupportedArchitectures.WESTMERE: "cpu_is_westmere"
 		}
@@ -207,10 +187,10 @@ def generate_wg_cycles_predictions(input_prediction_data):
 		with open(model_conf_fp, "w") as model_conf_file:
 			model_conf_file.write("key,value\n")
 			model_conf_file.write(arch_to_flag[target_arch] + ",TRUE\n")
-			if prediction_method == PredictionMethods.Difference:
-				model_conf_file.write("predict_perf_diff" + ",TRUE\n")
-				## Target is more expensive than MG-CFD:
-				model_conf_file.write("predict_perf_direction_additive" + ",TRUE\n")
+
+			model_conf_file.write("predict_perf_diff" + ",TRUE\n")
+			## Target is more expensive than MG-CFD:
+			model_conf_file.write("predict_perf_direction_additive" + ",TRUE\n")
 
 		## Run model:
 		os.system("python {0} -p".format(py_model_filepath))
@@ -224,14 +204,10 @@ def generate_wg_cycles_predictions(input_prediction_data):
 		cycles_prediction = model_input_prediction_data.iloc[0]["cycles_model"]
 		os.remove(model_prediction_fp)
 
-		if prediction_method == PredictionMethods.Difference:
-			if model_data["target_more_expensive"]:
-				target_wg_prediction = model_data["mini_wg_cycles"] + cycles_prediction
-			else:
-				target_wg_prediction = model_data["mini_wg_cycles"] - cycles_prediction
+		target_wg_prediction = cycles_prediction
 		if target_wg_prediction < 0.0:
 			raise Exception("target_wg_prediction is negative: {0}".format(target_wg_prediction))
-		target_predictions[i] = target_wg_prediction
+		target_predictions[idx] = target_wg_prediction
 
 	## Cleanup:
 	if os.path.isdir("Modelling"):
@@ -240,24 +216,24 @@ def generate_wg_cycles_predictions(input_prediction_data):
 	predictions_df = pd.DataFrame(input_prediction_data[get_id_colnames(input_prediction_data)])
 	predictions_df["target_wg_cycles_prediction"] = target_predictions
 
+	# ## Prune non-varying columns:
+	# for c in predictions_df.columns.values:
+	# 	if len(predictions_df[c].unique()) == 1:
+	# 		predictions_df.drop(c, axis=1, inplace=True)
+
 	return predictions_df
 
 target_wg_predictions_filepath = os.path.join(script_dirpath, "Prediction", "target_wg_predictions.csv")
 if regen or not os.path.isfile(target_wg_predictions_filepath):
 	wg_cycles_predictions = generate_wg_cycles_predictions(input_prediction_data)
 
-	if not "level" in ghz_data.columns.values:
-		## Add a 'level' column to ghz_data to pass validate check below:
-		ghz_data = pd_cartesian_merge(ghz_data, pd.DataFrame(data={"level":[0,1,2,3]}))
-
 	## Now prepare a multi-core oriented dataset for generating scaling predictions:
-	mc_prediction_data = ghz_data.merge(mini_wg_cycles, validate="one_to_one")
+	mc_prediction_data = mini_wg_cycles.merge(ghz_data, validate="many_to_one")
 	mc_prediction_data["wg_nsec_rw"] = mc_prediction_data["mini_wg_cycles_rw"] / mc_prediction_data["ghz_indirect_rw"]
 
 	mc_prediction_data = mc_prediction_data.merge(wg_cycles_predictions, validate="many_to_one")
 	mc_prediction_data["target_wg_nsec_prediction"] = mc_prediction_data["target_wg_cycles_prediction"] / mc_prediction_data["ghz_flux"]
 	mc_prediction_data["target_wg_nsec_prediction"] = np.maximum(mc_prediction_data["target_wg_nsec_prediction"], mc_prediction_data["wg_nsec_rw"])
-
 	mc_prediction_data["mini_wg"] = mc_prediction_data["mini_wg_cycles"] / mc_prediction_data["ghz_flux"] / 1e9
 
 	## Clean:

@@ -14,8 +14,9 @@ class SupportedArchitectures:
   HASWELL = 3
   BROADWELL = 4
   SKYLAKE = 5
-  KNL = 6
-  WESTMERE = 7
+  CASCADELAKE = 6
+  KNL = 7
+  WESTMERE = 8
 
 class UnknownInstruction(Exception):
   def __init__(self, insn_name, occurence_count):
@@ -119,7 +120,9 @@ def cpu_string_to_arch(cpu):
   
   if is_xeon and is_phi and "7210" in cpu:
     return SupportedArchitectures.KNL
-  if is_xeon and "Silver" in cpu:
+  if is_xeon and re.search("[0-9]2[0-9][0-9]", cpu):
+    return SupportedArchitectures.CASCADELAKE
+  if is_xeon and re.search("[0-9]1[0-9][0-9]", cpu):
     return SupportedArchitectures.SKYLAKE
   if is_xeon and "v4" in cpu:
     return SupportedArchitectures.BROADWELL

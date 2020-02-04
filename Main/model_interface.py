@@ -56,43 +56,27 @@ def main(argv):
 
         coefs = load_coefficients()
 
-        if not conf["predict_perf_diff"]:
-            y, A = load_calibration_data()
-            am = ArchModel(conf, A)
-            y_predict = am.predict(coefs, do_print=False, return_bottleneck=False)
-            y_predict = y_predict[0]
-            idle_cycles = max(0.0, y[0] - y_predict)
-            # print("Calibration idle_cycles = {0}".format(idle_cycles))
+        y, A = load_calibration_data()
+        am = ArchModel(conf, A)
+        y_predict = am.predict(coefs, do_print=False, return_bottleneck=False)
+        y_predict = y_predict[0]
+        if conf["predict_perf_diff"]:
+            model_correction = y[0] - y_predict
         else:
-            idle_cycles = 0.0
+            model_correction = 0.0
 
         y, A = load_predict_data()
         am = ArchModel(conf, A)
-        # y_predict = am.predict(coefs)
         y_predict, bottleneck = am.predict(coefs, do_print=False, return_bottleneck=True)
-        y_predict = y_predict[0]
-        if idle_cycles != 0.0:
-            if bottleneck is None or bottleneck == "":
-                bottleneck = "idle_cycles={0}".format(round(idle_cycles))
-            else:
-                bottleneck += ";idle_cycles={0}".format(round(idle_cycles))
 
-        if not conf["predict_perf_diff"]:
-            y_predict += idle_cycles
+        y_predict += model_correction
 
-        wg_cycles_reference = load_validation_data()
-        if wg_cycles_reference != None:
-            y_predict = max(y_predict, wg_cycles_reference["rw_cycles"])
-        
         write_prediction(conf, y_predict, bottleneck)
 
 def init_np():
     float_formatter = lambda x: "%+.2E" % x
-    # float_formatter = lambda x: "%+.1E" % x
-    # float_formatter = lambda x: "%.3f" % x
     np.set_printoptions(formatter={'float_kind':float_formatter}, linewidth=np.nan)
 
-    # np.random.seed(123456)
     np.random.seed(65432)
 
 def init_conf():
@@ -135,9 +119,7 @@ def load_data(filepath):
     mem_names = [n for n in data.columns.values if "mem" in n]
     coef_names = eu_names + mem_names
 
-    ## Remove duplicate rows:
-    # data = data.drop_duplicates(coef_names)
-    ## Instead, use average across duplicate rows:
+    ## Average across duplicate rows:
     data_grp = data.groupby(coef_names)
     data_mean = data_grp.mean().reset_index()
 
@@ -178,8 +160,6 @@ def find_solution(conf, A, y, am):
     y_error_pct = np.divide(y_error, y)
     print("y_error_pct:")
     print(["{0}%".format(round(100.0*p, 1)) for p in y_error_pct])
-    # y_error_sum = s.calc_model_error_sum(coef_final_estimate)
-    # print("y_error_sum = {0}".format(y_error_sum))
 
     coef_names = s.get_coef_names()
     solution_dict = {}
@@ -204,7 +184,6 @@ def write_solution(coef_final_estimate):
     with open(solution_filepath, "w") as solution_file:
         solution_file.write("coef,cpi\n")
         for k in coef_final_estimate:
-            # cpi = coef_final_estimate[k]
             cpi = round(coef_final_estimate[k], 4)
             solution_file.write("{0},{1}\n".format(k, cpi))
 
@@ -213,33 +192,21 @@ def write_prediction(conf, cycles_prediction, bottleneck=None):
     if os.path.exists(filepath):
         os.remove(filepath)
 
-    header="cycles_model"
-    data_line="{0}".format(cycles_prediction)
+    df = pd.DataFrame({"cycles_model":cycles_prediction, "bottleneck":bottleneck})
 
     wg_cycles_reference = load_validation_data()
     if wg_cycles_reference != None:
         cycles_correct = wg_cycles_reference["correct_cycles"]
         if conf["predict_perf_diff"]:
             if conf["predict_perf_direction_additive"]:
-                cycles_prediction = wg_cycles_reference["mini_cycles"] + cycles_prediction
+                df["cycles_model"] += wg_cycles_reference["mini_cycles"] + df["cycles_model"]
             else:
-                cycles_prediction = wg_cycles_reference["mini_cycles"] - cycles_prediction
-        if cycles_prediction < wg_cycles_reference["rw_cycles"]:
-            cycles_prediction = wg_cycles_reference["rw_cycles"]
-        error = cycles_prediction - cycles_correct
-        header += ",error"
-        data_line += ",{0}".format(error)
-        error_pct = error / cycles_correct
-        header += ",error_pct"
-        data_line += ",{0}".format(error_pct)
+                df["cycles_model"] = wg_cycles_reference["mini_cycles"] - df["cycles_model"]
+        df["cycles_model"] = np.maximum(df["cycles_model"], wg_cycles_reference["rw_cycles"])
+        df["error"] = df["cycles_model"] - cycles_correct
+        df["error_pct"] = df["error"] / cycles_correct
 
-    if not bottleneck is None:
-        header += ",bottleneck"
-        data_line += ",{0}".format(bottleneck)
-
-    with open(filepath, "w") as outfile:
-        outfile.write(header + "\n")
-        outfile.write(data_line + "\n")
+    df.to_csv(filepath, index=False)
 
 def load_coefficients():
     filepath = os.path.join(input_dirname, "solution.csv")

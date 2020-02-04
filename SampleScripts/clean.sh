@@ -11,3 +11,5 @@ fi
 if [ -d "${_dir}"/Training ] ; then
 	rm -r "${_dir}"/Training
 fi
+
+rm -f sbatch.stderr sbatch.stdout

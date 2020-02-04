@@ -12,6 +12,9 @@ library(flock)
 # R runtime errors do not report the line number.
 ############################################################
 
+# debug_model_fitting <- TRUE
+debug_model_fitting <- FALSE
+
 get_script_filepath <- function() {
     cmd_args <- commandArgs(trailingOnly = FALSE)
     needle <- "--file="
@@ -39,8 +42,7 @@ source(file.path(script_dirpath, "../utils.R"))
 ## By having "CC" in reserved_col_names, it ends up being ignored by model fitting.
 reserved_col_names <- c('Num.threads', 'PAPI.counter', 'Flux.variant', "niters", "kernel")
 
-# mandatory_columns <- c("Instruction.set")
-mandatory_columns <- c("Instruction.set", "CPU")
+mandatory_columns <- c("Instruction.set", "CPU", "CC")
 
 ##########################################################
 ## Model config:
@@ -70,9 +72,9 @@ do_load_penalty_values <- c(FALSE)
 # do_prune_insn_classes_values <- c(FALSE)
 do_prune_insn_classes_values <- c(TRUE)
 
-do_ignore_loads_stores_values <- c(FALSE, TRUE)
+# do_ignore_loads_stores_values <- c(FALSE, TRUE)
 # do_ignore_loads_stores_values <- c(TRUE)
-# do_ignore_loads_stores_values <- c(FALSE)
+do_ignore_loads_stores_values <- c(FALSE)
 
 model_fitting_strategy_datums <- list(miniDifferences="miniDifferences", miniAbsolute="miniAbsolute")
 model_fitting_strategy_values <- unlist(model_fitting_strategy_datums, use.names=FALSE)
@@ -94,41 +96,25 @@ optimisation_search_algorithms <- list(basin="basin", shgo="shgo")
 optimisation_search_algorithm_values <- c("basin")
 # optimisation_search_algorithm_values <- c("shgo")
 
-## Notes on basin config:
-#  - 1500 iters almost-always gives same result as 2500
-#  -  500 iters often gives different result to 1500, even with insn pruning
-#  => use 1500 iters
-#  - 250 jumps often gives different result to 150 jumps, particularly of ALU CPI.
-#  => use 250 jumps
-#  - step 1 almost-always different to larger jumps
-#  - step 2 sometimes gives best result, other times step 4 gives best.
-#  - - sometimes they find different solutions with same sum-error-pct, but only with no pruning
-#  => use a variety of step sizes
+## 100 iterations should be enough to complete local minimisation, but 
+## set to 150 to be sure.
+basin_local_iters_values <- c(150)
+## Do not need many jumps:
+basin_jump_values <- c(10)
+basin_step_values <- c(1)
 
-basin_local_iters_values <- c(1500)
-basin_jump_values <- c(250)
-basin_step_values <- c(1, 2, 3, 4)
+# basin_local_iters_values <- c(250, 300)
+# basin_jump_values <- c(15, 50)
+# basin_step_values <- c(1, 2)
 
-# basin_local_iters_values <- c(500, 1000, 1500, 2500)
-# basin_jump_values <- c(50, 150, 250)
-# basin_step_values <- c(1, 2, 3, 4)
-
-# basin_local_iters_values <- c(2500)
-# basin_jump_values <- c(250)
-# basin_step_values <- c(10)
+# basin_local_iters_values <- c(100, 150, 250)
+# basin_jump_values <- c(10)
+# basin_step_values <- c(1, 2, 3)
 
 # Fast basin for debugging:
-# basin_local_iters_values <- c(500)
+# basin_local_iters_values <- c(100)
 # basin_jump_values <- c(50)
 # basin_step_values <- c(1)
-# basin_local_iters_values <- c(10)
-# basin_jump_values <- c(10)
-# basin_step_values <- c(1)
-
-num_repeats <- 1
-## Basin hopping appears to be deterministic, do not need repeats
-# num_repeats <- 2
-# num_repeats <- 3
 
 kernels_to_ignore <- c('compute_step', 'time_step', 'up', 'down')
 data_cols_to_ignore <- c()
@@ -157,6 +143,9 @@ preprocess_input_csv <- function(D) {
     if ("CC.version" %in% names(D)) {
         D$CC.version <- NULL
     }
+    if ("MG.cycles" %in% names(D)) {
+        D$MG.cycles <- NULL
+    }
 
     ## Drop non-varying cols:
     data_col_names <- get_data_col_names(D)
@@ -174,6 +163,29 @@ preprocess_input_csv <- function(D) {
             D[,col] <- NULL
         }
     }
+
+    # if ("Num.threads" %in% names(D)) {
+    #     D <- D[D$Num.threads==1,]
+    # }
+    # if ("Mesh" %in% names(D)) {
+    #     ## Keep the one mesh with most data:
+    #     meshes <- unique(D$Mesh)
+    #     mesh_counts <- c()
+    #     for (m in meshes) {
+    #         mesh_counts[m] <- sum(D$Mesh==m)
+    #     }
+    #     largest_m <- D$Mesh[1]
+    #     largest_m_count <- mesh_counts[largest_m]
+    #     for (m in meshes) {
+    #         mc <- mesh_counts[m]
+    #         if (mc > largest_m_count) {
+    #             largest_m <- m
+    #             largest_m_count <- mc
+    #         }
+    #     }
+    #     D <- D[D$Mesh==largest_m,]
+    #     D[,"Mesh"] <- NULL
+    # }
 
     if (!("var_id" %in% names(D))) {
         cols_to_concat <- setdiff(names(D), c(reserved_col_names, data_col_names, "Num.threads"))
@@ -365,12 +377,6 @@ for (cn in names(ic)) {
 }
 
 ic <- preprocess_input_csv(ic)
-ic_tmp <- split_col(ic, "var_id")
-f <- ic_tmp$Flux.variant=="Normal"
-if ("Num.threads" %in% names(ic_tmp)) {
-    f <- f & (ic_tmp$Num.threads==1) & (ic_tmp$Permit.scatter.OpenMP=="N")
-}
-write.csv(ic_tmp[f,], "instruction-counts.categorised.csv", row.names=FALSE)
 #########################################
 
 #################################################################################
@@ -484,14 +490,24 @@ if (nrow_pre != nrow_post) {
 ## Merge in loop iteration counts:
 nrow_pre <- nrow(perf_data)
 merge_cols <- intersect(names(perf_data), names(loop_niters_data))
-perf_data <- merge(perf_data, loop_niters_data, all=FALSE)
-nrow_post <- nrow(perf_data)
+perf_data2 <- merge(perf_data, loop_niters_data, all=FALSE)
+nrow_post <- nrow(perf_data2)
 if (nrow_pre != nrow_post) {
     print(paste(nrow_pre, "rows before merge(perf_data, loop_niters_data) but", nrow_post, "rows after"))
     print("Merged on these columns:")
     print(merge_cols)
+    if (length(merge_cols) == 1) {
+        perf_data <- perf_data[order(perf_data[,merge_cols[1]]), c(merge_cols, setdiff(names(perf_data), merge_cols))]
+        loop_niters_data <- loop_niters_data[order(loop_niters_data[,merge_cols[1]]), c(merge_cols, setdiff(names(loop_niters_data), merge_cols))]
+    } else {
+        perf_data <- perf_data[do.call(order, perf_data[,merge_cols]), c(merge_cols, setdiff(names(perf_data), merge_cols))]
+        loop_niters_data <- loop_niters_data[do.call(order, loop_niters_data[,merge_cols]), c(merge_cols, setdiff(names(loop_niters_data), merge_cols))]
+    }
+    write.csv(perf_data, "debug-perf_data.csv", row.names=FALSE)
+    write.csv(loop_niters_data, "debug-loop_niters_data.csv", row.names=FALSE)
     q()
 }
+perf_data <- perf_data2
 
 ## Merge in instruction counts:
 nrow_pre <- nrow(perf_data)
@@ -504,6 +520,31 @@ if (nrow_pre != nrow_post) {
     print(merge_cols)
     q()
 }
+
+write.csv(perf_data, "merged_performance_data.csv", row.names=FALSE)
+if ("Num.threads" %in% names(perf_data)) {
+    perf_data <- perf_data[perf_data$Num.threads==1,]
+}
+if ("Mesh" %in% names(perf_data)) {
+    ## Keep the one mesh with most data:
+    meshes <- unique(perf_data$Mesh)
+    mesh_counts <- c()
+    for (m in meshes) {
+        mesh_counts[m] <- sum(perf_data$Mesh==m)
+    }
+    largest_m <- perf_data$Mesh[1]
+    largest_m_count <- mesh_counts[largest_m]
+    for (m in meshes) {
+        mc <- mesh_counts[m]
+        if (mc > largest_m_count) {
+            largest_m <- m
+            largest_m_count <- mc
+        }
+    }
+    perf_data <- perf_data[perf_data$Mesh==largest_m,]
+    perf_data[,"Mesh"] <- NULL
+}
+
 #################################################################################
 
 eu_and_mem_colnames <- intersect(names(perf_data), c(exec_unit_colnames, mem_event_colnames))
@@ -525,32 +566,34 @@ perf_data <- split_col(perf_data, "var_id")
 # if ("SSE42" %in% perf_data$Instruction.set) {
 #     perf_data <- perf_data[perf_data$Instruction.set=="SSE42",]
 # }
-if ("level" %in% names(perf_data)) {
-    perf_data <- perf_data[perf_data$level==0,]
-}
+# if ("level" %in% names(perf_data)) {
+#     perf_data <- perf_data[perf_data$level==0,]
+# }
+# if ("OpenMP" %in% names(perf_data)) {
+#     perf_data <- perf_data[perf_data$OpenMP=="Off",]
+# }
+# if ("CC" %in% names(perf_data)) {
+#     perf_data <- perf_data[perf_data$CC=="intel",]
+# }
 if (nrow(perf_data)==0) {
     stop("perf_data is empty")
 }
 
 perf_data$CPU <- cpu
 cols_to_keep <- setdiff(names(perf_data), "eu.load")
-perf_data$CPU <- NULL
+# perf_data$CPU <- NULL
 ## Now, strip out multi-threaded performance data for the following modelling
 if ("KMP.hw.subset" %in% names(perf_data)) {
     perf_data$KMP.hw.subset <- NULL
 }
-if ("OpenMP" %in% names(perf_data)) {
-    single_thread_filter <- (perf_data$OpenMP=="Off") | (perf_data$OpenMP=="N")
-    perf_data <- perf_data[single_thread_filter,]
-    perf_data[,"OpenMP"] <- NULL
-}
 if ("Permit.scatter.OpenMP" %in% names(perf_data)) {
-    perf_data <- perf_data[perf_data$Permit.scatter.OpenMP=="N",]
     perf_data[,"Permit.scatter.OpenMP"] <- NULL
 }
 cols_to_concat <- setdiff(names(perf_data), c(reserved_col_names, data_col_names, papi_events_to_to_keep, "runtime", "kernel", eu_and_mem_colnames))
+cols_to_concat <- setdiff(cols_to_concat, c("CPU"))
 perf_data <- concat_cols(perf_data, cols_to_concat, "var_id", TRUE)
-write.csv(perf_data, "merged_performance_data.csv", row.names=FALSE)
+# write.csv(perf_data, "merged_performance_data.csv", row.names=FALSE)
+perf_data$CPU <- NULL
 
 #################################################################################
 
@@ -588,14 +631,6 @@ perf_data$PAPI_TOT_INS.eu_diff <- NULL
 print("Good, sum of instructions agrees with PAPI_TOT_INS")
 #################################################################################
 
-projections_filename <- "cpi_estimates.csv"
-if (file.exists(projections_filename)) {
-    cpi_estimates <- read.csv(projections_filename, stringsAsFactors=FALSE)
-    cpi_estimates[is.na(cpi_estimates[,"optimisation_search_option"]), "optimisation_search_option"] <- ""
-} else {
-    cpi_estimates <- NULL
-}
-
 ## Clean perf_data
 for (col in c("Num.threads")) {
     if (col %in% names(perf_data)) {
@@ -613,12 +648,17 @@ perf_data$wg_sec    <- perf_data$runtime / perf_data$niters
 cpu_is_xeon <- length(grep("Xeon",cpu))>0
 cpu_is_phi <- cpu_is_xeon && (length(grep("Phi",cpu))>0)
 cpu_is_knl <- cpu_is_phi && (length(grep("7210",cpu))>0)
-cpu_is_skylake <- cpu_is_xeon && (length(grep("Silver",cpu))>0)
+cpu_is_cascade <- cpu_is_xeon && (length(grep("[0-9]2[0-9][0-9]",cpu))>0)
+cpu_is_skylake <- cpu_is_xeon && (length(grep("[0-9]1[0-9][0-9]",cpu))>0)
 cpu_is_broadwell <- cpu_is_xeon && (length(grep("v4",cpu))>0)
 cpu_is_haswell <- length(grep("i5-4",cpu))>0
 cpu_is_ivy <- cpu_is_xeon && (length(grep("v2",cpu))>0)
 cpu_is_sandy <- length(grep("i5-2",cpu))>0
 cpu_is_westmere <- cpu_is_xeon && (length(grep("X5650",cpu))>0)
+if (cpu_is_cascade) {
+    ## Cascade Lake architecture is same as Skylake
+    cpu_is_skylake <- TRUE
+}
 
 perf_data_master <- data.frame(perf_data)
 eu_and_mem_colnames_master <- eu_and_mem_colnames
@@ -644,8 +684,6 @@ eu_and_mem_colnames <- intersect(names(perf_data), c(exec_unit_colnames, mem_eve
 eu_colnames <- intersect(names(perf_data), c(exec_unit_colnames))
 #################################################################################
 
-model_coefs <- c()
-
 ## Construct combinations of var_id's and model permutations:
 var_vals <- unique(perf_data$var_id)
 model_perms <- merge(var_vals, do_spill_penalty_values, all=TRUE)
@@ -667,8 +705,8 @@ model_perms <- merge(model_perms, basin_jump_values, all=TRUE)
 model_perms <- rename_col(model_perms, "y", "opt_num_jumps")
 model_perms <- merge(model_perms, basin_step_values, all=TRUE)
 model_perms <- rename_col(model_perms, "y", "opt_step_size")
-
-model_perms <- merge(model_perms, data.frame("run_num"=seq(1,num_repeats)))
+model_perms <- merge(model_perms, optimisation_search_algorithm_values, all=TRUE)
+model_perms <- rename_col(model_perms, "y", "optimisation_search_algorithm")
 
 cols_to_default_to_zero <- c("load_penalty", "spill_penalty")
 cols_to_default_to_one <- c("eu.alu", "eu.simd_alu", "eu.fp_shuffle", "eu.fp_fma", "eu.fp_add", "eu.fp_div", "eu.fp_div_fast", "eu.avx512", "mem.loads", "mem.stores", "mem.spills")
@@ -680,6 +718,9 @@ append_and_write_row <- function(r) {
         projections_filename <- "cpi_estimates.csv"
         if (file.exists(projections_filename)) {
             cpi_estimates <- read.csv(projections_filename, stringsAsFactors=FALSE)
+            if (!("optimisation_search_option" %in% names(cpi_estimates))) {
+                cpi_estimates <- concat_cols(cpi_estimates, c("iters", "jumps", "steps"), "optimisation_search_option", TRUE)
+            }
             cpi_estimates[is.na(cpi_estimates[,"optimisation_search_option"]), "optimisation_search_option"] <- ""
         } else {
             cpi_estimates <- NULL
@@ -715,27 +756,75 @@ append_and_write_row <- function(r) {
     return(cpi_estimates)
 }
 
+cpi_estimate_already_exists <- function(var_id, model_perm) {
+    projections_filename <- "cpi_estimates.csv"
+    if (file.exists(projections_filename)) {
+        cpi_estimates <- read.csv(projections_filename, stringsAsFactors=FALSE)
+        if (!("optimisation_search_option" %in% names(cpi_estimates))) {
+            cpi_estimates <- concat_cols(cpi_estimates, c("iters", "jumps", "steps"), "optimisation_search_option", TRUE)
+        }
+        cpi_estimates[is.na(cpi_estimates[,"optimisation_search_option"]), "optimisation_search_option"] <- ""
+    } else {
+        # cpi_estimates <- NULL
+        return(FALSE)
+    }
+
+    if (nrow(model_perm) != 1) {
+        stop(paste("Expected one row in model_perm, not", nrow(model_perm)))
+    }
+
+    f <- cpi_estimates$var_id == var_id
+    for (mp in names(model_perm)) {
+        if (mp %in% names(cpi_estimates)) {
+            # print(paste0("Checking mp=",mp))
+            rhs <- (cpi_estimates[,mp] == model_perm[1,mp])
+            # print("f:")
+            # print(f)
+            # print("rhs:")
+            # print(rhs)
+            f <- f & rhs
+        }
+    }
+    # print("Final check")
+    if (sum(f) > 0) {
+        return(TRUE)
+    } else {
+        return(FALSE)
+    }
+}
+
 predict_fn <- function(model_perm_id) {
     # Decode model_perm_id:
     model_perm <- model_perms[model_perm_id,]
     var_id <- as.character(model_perm$var_id)
 
+    baseline_kernel <- as.character(model_perm$baseline_kernel)
+    model_fitting_strategy <- as.character(model_perm$model_fitting_strategy)
+    do_spill_penalty <- model_perm$do_spill_penalty
+    do_load_penalty <- model_perm$do_load_penalty
+    do_prune_insn_classes <- model_perm$do_prune_insn_classes
+    do_ignore_loads_stores <- model_perm$do_ignore_loads_stores
+    optimisation_search_algorithm <- model_perm$optimisation_search_algorithm
+    opt_num_iters <- model_perm$opt_num_iters
+    opt_num_jumps <- model_perm$opt_num_jumps
+    opt_step_size <- model_perm$opt_step_size
+
+    if (optimisation_search_algorithm=="basin") {
+        model_perm$optimisation_search_option <- paste0("iters=",opt_num_iters,"^jumps=",opt_num_jumps,"^steps=",opt_step_size)
+        model_perm$optimisation_search_cost   <- opt_num_iters*opt_num_jumps
+    } else {
+        model_perm$optimisation_search_option <- ""
+        model_perm$optimisation_search_cost   <- 1
+    }
+
     print(paste("Processing", model_perm_id, "of", nrow(model_perms), "(var_id =", var_id, ")"))
 
     model_data <- perf_data[perf_data$var_id==var_id,]
 
-    do_spill_penalty <- model_perm$do_spill_penalty
-    do_load_penalty <- model_perm$do_load_penalty
     if (do_spill_penalty && do_load_penalty) {
         # Nonsense
         return()
     }
-    baseline_kernel <- as.character(model_perm$baseline_kernel)
-    model_fitting_strategy <- as.character(model_perm$model_fitting_strategy)
-    optimisation_search_algorithm <- "basin"
-    opt_num_iters <- model_perm$opt_num_iters
-    opt_num_jumps <- model_perm$opt_num_jumps
-    opt_step_size <- model_perm$opt_step_size
 
     if (do_load_penalty) {
         ## Spills and loads will be treated 100% identically by model, so just combine here
@@ -745,7 +834,6 @@ predict_fn <- function(model_perm_id) {
     model_eu_and_mem_colnames <- intersect(names(model_data), c(exec_unit_colnames, mem_event_colnames))
     model_eu_colnames <- intersect(names(model_data), c(exec_unit_colnames))
 
-    do_prune_insn_classes <- model_perm$do_prune_insn_classes
     if (do_prune_insn_classes) {
         merge_mappings <- list()
         merge_mappings[[length(merge_mappings)+1]] <- c("eu.fp_shuffle", "")
@@ -779,7 +867,6 @@ predict_fn <- function(model_perm_id) {
         model_eu_colnames <- intersect(names(model_data), c(exec_unit_colnames))
     }
 
-    do_ignore_loads_stores <- model_perm$do_ignore_loads_stores
     if (do_ignore_loads_stores) {
         for (col in c("mem.loads", "mem.stores")) {
             if (col %in% names(model_data)) {
@@ -789,8 +876,8 @@ predict_fn <- function(model_perm_id) {
         model_eu_and_mem_colnames <- intersect(names(model_data), c(exec_unit_colnames, mem_event_colnames))
         model_eu_colnames <- intersect(names(model_data), c(exec_unit_colnames))
 
-        # Drop indirect-rw kernel:
-        model_data <- model_data[model_data["kernel"]!="indirect_rw",]
+        # # Drop indirect-rw kernel:
+        # model_data <- model_data[model_data["kernel"]!="indirect_rw",]
     }
 
     #################################################################################
@@ -841,14 +928,12 @@ predict_fn <- function(model_perm_id) {
         }
     }
 
-    if (model_fitting_strategy == "miniAbsolute") {
-        ## Can fit to both 'flux' and 'indirect_rw' kernels
-        lin_systems <- data.frame(model_data)
-        lin_systems$tmp_order <- lin_systems$Flux.variant=="Normal"
-        lin_systems <- lin_systems[rev(order(lin_systems$tmp_order)),]
-        lin_systems$tmp_order <- NULL
-        lin_systems <- lin_systems[order(lin_systems[,"var_id"], lin_systems[,"kernel"]),]
-    }
+    ## Can fit to both 'flux' and 'indirect_rw' kernels
+    lin_systems <- data.frame(model_data)
+    lin_systems$tmp_order <- lin_systems$Flux.variant=="Normal"
+    lin_systems <- lin_systems[rev(order(lin_systems$tmp_order)),]
+    lin_systems$tmp_order <- NULL
+    lin_systems <- lin_systems[order(lin_systems[,"var_id"], lin_systems[,"kernel"]),]
 
     ## Filter-out baseline (drop.sum = 0):
     lin_systems_relative[,"drop.sum"] <- 0
@@ -906,7 +991,7 @@ predict_fn <- function(model_perm_id) {
                                     baseline_kernel=baseline_kernel, 
                                     stringsAsFactors=FALSE)
     if (optimisation_search_algorithm=="basin") {
-        proj_row_template$optimisation_search_option <- paste0("iters=",opt_num_iters,";jumps=",opt_num_jumps,";steps=",opt_step_size)
+        proj_row_template$optimisation_search_option <- paste0("iters=",opt_num_iters,"^jumps=",opt_num_jumps,"^steps=",opt_step_size)
         proj_row_template$optimisation_search_cost   <- opt_num_iters*opt_num_jumps
     } else {
         proj_row_template$optimisation_search_option <- ""
@@ -918,29 +1003,8 @@ predict_fn <- function(model_perm_id) {
     var_id <- as.character(var_id)
     proj_row$var_id <- var_id
 
-    # Check if predictions already exist:
-    num_existing_runs <- 0
-    if (!is.null(cpi_estimates)) {
-        f <- cpi_estimates$var_id == var_id
-        f <- f & (cpi_estimates[,"do_spill_penalty"] == proj_row$do_spill_penalty)
-        f <- f & (cpi_estimates[,"do_load_penalty"] == proj_row$do_load_penalty)
-        f <- f & (cpi_estimates[,"do_prune_insn_classes"] == proj_row$do_prune_insn_classes)
-        f <- f & (cpi_estimates[,"do_ignore_loads_stores"] == proj_row$do_ignore_loads_stores)
-        f <- f & (cpi_estimates[,"model_fitting_strategy"] == proj_row$model_fitting_strategy)
-        f <- f & (cpi_estimates[,"optimisation_search_algorithm"] == proj_row$optimisation_search_algorithm)
-        f <- f & (cpi_estimates[,"optimisation_search_option"] == proj_row$optimisation_search_option)
-        num_existing_runs <- sum(f)
-    }
-    if (model_perm$run_num <= num_existing_runs) {
-        return()
-    }
-
     ## Select the linear system for model fitting:
-    if (model_fitting_strategy == model_fitting_strategy_datums[["miniDifferences"]]) {
-        var_lin_system <- lin_systems_relative[lin_systems_relative$var_id==var_id,]
-    } else {
-        var_lin_system <- lin_systems[lin_systems$var_id==var_id,]
-    }
+    var_lin_system <- lin_systems[lin_systems$var_id==var_id,]
 
     model_conf <- data.frame(model_config_df)
 
@@ -1028,8 +1092,26 @@ predict_fn <- function(model_perm_id) {
         proj_row[coef] <- cpi
     }
 
-    ## Cleanup:
-    system(paste("rm -r", model_dirname))
+    if (debug_model_fitting) {
+        # Generate WG predictions to assist debugging:
+        mg_cfd_data <- var_lin_system
+        mg_cfd_data <- mg_cfd_data[,c("wg_cycles", model_coef_colnames)]
+        mg_cfd_data$wg_cycles <- 0.0
+        write.csv(mg_cfd_data, file.path(model_dirname, "prediction_data.csv"), row.names=FALSE)
+        python_output <- system(paste("python", file.path(script_dirpath, "model_interface.py"), "-p", "-d", model_dirname), intern=TRUE)
+        prediction_filepath <- file.path(model_dirname, "prediction.csv")
+        if (!file.exists(prediction_filepath)) {
+            print(paste0("ERROR: Python script did not complete and write prediction to csv: ", prediction_filepath))
+            print(python_output)
+            q()
+        }
+        prediction <- read.csv(prediction_filepath)
+        model_data <- cbind(model_data, prediction)
+        write.csv(model_data, file.path(model_dirname, "modelling_input_data.csv"), row.names=FALSE)
+    } else {
+        ## Cleanup:
+        system(paste("rm -r", model_dirname))
+    }
 
     ll = lock(lock_filename)
     if (!is.locked(ll)) {
@@ -1041,12 +1123,58 @@ predict_fn <- function(model_perm_id) {
     return(proj_row)
 }
 
+prune_model_perms <- function(model_perms) {
+    model_perms_pruned <- NULL
+
+    for (model_perm_id in 1:nrow(model_perms)) {
+        # Decode model_perm_id:
+        model_perm <- model_perms[model_perm_id,]
+        var_id <- as.character(model_perm$var_id)
+
+        baseline_kernel <- as.character(model_perm$baseline_kernel)
+        model_fitting_strategy <- as.character(model_perm$model_fitting_strategy)
+        do_spill_penalty <- model_perm$do_spill_penalty
+        do_load_penalty <- model_perm$do_load_penalty
+        do_prune_insn_classes <- model_perm$do_prune_insn_classes
+        do_ignore_loads_stores <- model_perm$do_ignore_loads_stores
+        optimisation_search_algorithm <- model_perm$optimisation_search_algorithm
+        opt_num_iters <- model_perm$opt_num_iters
+        opt_num_jumps <- model_perm$opt_num_jumps
+        opt_step_size <- model_perm$opt_step_size
+
+        if (optimisation_search_algorithm=="basin") {
+            model_perm$optimisation_search_option <- paste0("iters=",opt_num_iters,"^jumps=",opt_num_jumps,"^steps=",opt_step_size)
+            model_perm$optimisation_search_cost   <- opt_num_iters*opt_num_jumps
+        } else {
+            model_perm$optimisation_search_option <- ""
+            model_perm$optimisation_search_cost   <- 1
+        }
+
+        # ll = lock(lock_filename)
+        # if (!is.locked(ll)) {
+        #     stop("Failed to obtain file lock")
+        # }
+        v <- cpi_estimate_already_exists(var_id, model_perm)
+        # unlock(ll)
+        if (!v) {
+            if (is.null(model_perms_pruned)) {
+                model_perms_pruned <- model_perms[model_perm_id,]
+            } else {
+                model_perms_pruned <- safe_rbind(model_perms_pruned, model_perms[model_perm_id,])
+            }
+        }
+    }
+
+    return(model_perms_pruned)
+}
+
+model_perms <- prune_model_perms(model_perms)
+
 model_perms_ids <- 1:nrow(model_perms)
 # for (i in model_perms_ids) {
 #     print(paste("i=",i))
 #     r <- predict_fn(i)
 # }
-# q()
 res <- mclapply(model_perms_ids, predict_fn, mc.cores = numCores)
 # Reload 'cpi_estimates' from filesystem, only way I know of to synchronise between worker processes:
 projections_filename <- "cpi_estimates.csv"
@@ -1059,10 +1187,21 @@ if (file.exists(projections_filename)) {
 
 print("Finished fitting, now writing out.")
 
+model_coefs <- c()
+for (col in names(cpi_estimates)) {
+    if (startsWith(col, "eu.") || startsWith(col, "mem.")) {
+        model_coefs <- c(model_coefs, col)
+    }
+}
+
 model_conf_params <- intersect(model_conf_params, names(cpi_estimates))
 order_cols <- c()
 if ("var_id" %in% names(cpi_estimates)) {
     order_cols <- c(order_cols, "var_id")
+    # cols_before <- names(cpi_estimates)
+    # cpi_estimates <- split_col(cpi_estimates, "var_id")
+    # new_cols <- setdiff(names(cpi_estimates), cols_before)
+    # order_cols <- c(order_cols, new_cols)
 }
 if (length(model_conf_params) > 0) {
     order_cols <- c(order_cols, model_conf_params)
@@ -1071,7 +1210,8 @@ if ("optimisation_search_cost" %in% names(cpi_estimates)) {
     order_cols <- c(order_cols, "optimisation_search_cost")
 }
 if ("optimisation_search_option" %in% names(cpi_estimates)) {
-    order_cols <- c(order_cols, "optimisation_search_option")
+    # order_cols <- c(order_cols, "optimisation_search_option")
+    cpi_estimates <- split_col(cpi_estimates, "optimisation_search_option")
 }
 if (length(order_cols) > 0) {
     if (length(order_cols) == 1) {
