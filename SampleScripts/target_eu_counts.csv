@@ -1,2 +1,2 @@
-Instruction.set,Precise.FP,eu.simd_alu,eu.fp_div_fast,eu.avx512,eu.fp_add,eu.fp_shuffle,eu.fp_fma,eu.alu,eu.fp_div,eu.fp_mul,mem.loads,mem.stores,mem.load_spills,mem.store_spills
-AVX2,Y,0,0,0,102,46,105,35,35,123,284,129,0,0
+Instruction.set,Precise.FP,eu.alu,eu.fp_add,eu.fp_mul,eu.fp_fma,eu.fp_div,eu.fp_shuffle,mem.loads,mem.stores
+AVX2,Y,30,100,150,100,30,50,150,75
