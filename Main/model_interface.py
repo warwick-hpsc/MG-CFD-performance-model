@@ -56,13 +56,16 @@ def main(argv):
 
         coefs = load_coefficients()
 
-        y, A = load_calibration_data()
-        am = ArchModel(conf, A)
-        y_predict = am.predict(coefs, do_print=False, return_bottleneck=False)
-        y_predict = y_predict[0]
-        if conf["predict_perf_diff"]:
-            model_correction = y[0] - y_predict
-        else:
+        try:
+            y, A = load_calibration_data()
+            am = ArchModel(conf, A)
+            y_predict = am.predict(coefs, do_print=False, return_bottleneck=False)
+            y_predict = y_predict[0]
+            if conf["predict_perf_diff"]:
+                model_correction = y[0] - y_predict
+            else:
+                model_correction = 0.0
+        except:
             model_correction = 0.0
 
         y, A = load_predict_data()

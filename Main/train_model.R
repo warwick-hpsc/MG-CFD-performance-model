@@ -41,6 +41,7 @@ source(file.path(script_dirpath, "../utils.R"))
 ## to get to CPI of div-fast and I do not know why.
 ## By having "CC" in reserved_col_names, it ends up being ignored by model fitting.
 reserved_col_names <- c('Num.threads', 'PAPI.counter', 'Flux.variant', "niters", "kernel")
+reserved_col_names <- c(reserved_col_names, "SIMD.conflict.avoidance.strategy")
 
 mandatory_columns <- c("Instruction.set", "CPU", "CC")
 
@@ -48,7 +49,7 @@ mandatory_columns <- c("Instruction.set", "CPU", "CC")
 ## Model config:
 ##########################################################
 
-data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'up', 'down', 'indirect_rw')
+data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'indirect_rw')
 
 model_conf_params <- c()
 model_conf_params <- c(model_conf_params, "do_spill_penalty")
@@ -116,7 +117,7 @@ basin_step_values <- c(1)
 # basin_jump_values <- c(50)
 # basin_step_values <- c(1)
 
-kernels_to_ignore <- c('compute_step', 'time_step', 'up', 'down')
+kernels_to_ignore <- c('compute_step', 'time_step', 'restrict', 'prolong')
 data_cols_to_ignore <- c()
 for (l in 0:3) {
     for (k in kernels_to_ignore) {
@@ -614,13 +615,18 @@ bad_run_threshold <- rep(1.0, nrow(perf_data))
 ## Allow a higher deviation for AVX-512 due to unpredictability of 
 ## AVX-512-CD masked remainder loops:
 bad_run_threshold[grep("AVX512", perf_data$var_id)] <- 66.0
+## Allow a tolerance where manual CA is used, due to nested loop admin instructions:
+manual_ca_mask <- grep("Manual", perf_data$SIMD.conflict.avoidance.strategy)
+bad_run_threshold[manual_ca_mask] <- 0.05*perf_data[manual_ca_mask, "PAPI_TOT_INS.piter"]
+
 bad_runs <- abs(perf_data$PAPI_TOT_INS.eu_diff) > bad_run_threshold
 if (sum(bad_runs)>0) {
-    if (sum(bad_runs) > 10) {
-        bad_runs[10:length(bad_runs)] <- FALSE
+    bad_perf_data <- perf_data[bad_runs,]
+    if (nrow(bad_perf_data) > 10) {
+        bad_perf_data <- bad_perf_data[1:10,]
     }
     print("Error: Assembly counts do not match with PAPI_TOT_INS for these runs:")
-    print(perf_data[bad_runs,c("var_id", "Flux.variant", "PAPI_TOT_INS.piter", "PAPI_TOT_INS.expected_piter", "PAPI_TOT_INS.eu_diff")])
+    print(bad_perf_data[,c("var_id", "Flux.variant", "PAPI_TOT_INS.piter", "PAPI_TOT_INS.expected_piter", "PAPI_TOT_INS.eu_diff")])
     write.csv(perf_data, "perf_data.csv", row.names=FALSE)
     q()
 }
@@ -839,7 +845,10 @@ predict_fn <- function(model_perm_id) {
         merge_mappings[[length(merge_mappings)+1]] <- c("eu.fp_shuffle", "")
         merge_mappings[[length(merge_mappings)+1]] <- c("eu.simd_alu", "eu.alu")
         merge_mappings[[length(merge_mappings)+1]] <- c("eu.fp_fma", "eu.fp_mul")
-        merge_mappings[[length(merge_mappings)+1]] <- c("eu.fp_add", "eu.fp_mul") ## <- newly added
+        merge_mappings[[length(merge_mappings)+1]] <- c("eu.fp_add", "eu.fp_mul")
+
+        merge_mappings[[length(merge_mappings)+1]] <- c("eu.simd_fp_shuffle", "") ## <- newly added
+        merge_mappings[[length(merge_mappings)+1]] <- c("eu.simd_fp_add", "eu.simd_fp_mul") ## <- newly added
         for (m in merge_mappings) {
             if (m[1] %in% names(model_data)) {
                 if (m[2] == "") {
@@ -890,43 +899,43 @@ predict_fn <- function(model_perm_id) {
     data_col_names <- setdiff(names(lin_systems), c("var_id", "Flux.variant", "kernel", "level", "niters", "CC"))
     ## First linear system is now ready (absolute performance data)
 
-    ## Construct second linear system consisting of performance differences between MG-CFD variants:
-    lin_systems_relative <- data.frame(model_data_flux)
-    lin_systems_relative[,data_col_names] <- 0
-    for (v in unique(lin_systems$var_id)) {
-        v_filter <- lin_systems$var_id==v
+    # ## Construct second linear system consisting of performance differences between MG-CFD variants:
+    # lin_systems_relative <- data.frame(model_data_flux)
+    # lin_systems_relative[,data_col_names] <- 0
+    # for (v in unique(lin_systems$var_id)) {
+    #     v_filter <- lin_systems$var_id==v
 
-        if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
-            baseline_filter <- v_filter & (lin_systems$Flux.variant=="FluxCripple")
-            baseline <- lin_systems[baseline_filter,]
-        } else {
-            ## Use variant with almost most instructions as the baseline:
-            ls_v_ordered <- data.frame(lin_systems[v_filter,])
-            ls_v_ordered <- ls_v_ordered[order(-ls_v_ordered$wg_cycles),]
-            ls_v_ordered <- ls_v_ordered[grepl("Normal", ls_v_ordered$Flux.variant),]
-            ls_v_ordered <- ls_v_ordered[ls_v_ordered$Flux.variant != "Normal-PrecomputeLength;",]
-            mini_baseline_variant <- ls_v_ordered$Flux.variant[1]
-            baseline <- ls_v_ordered[ls_v_ordered$Flux.variant==mini_baseline_variant,]
-        }
-        if (nrow(baseline) != 1) {
-            # Possible when using multiple compilers.
-            baseline <- baseline[order(baseline$runtime),]
-            baseline <- baseline[1,]
-        }
-        if (nrow(baseline) != 1) {
-            print(paste("nrow(baseline) =", nrow(baseline)))
-            print(baseline)
-            stop(paste("Failed to get baseline for var_id =", v))
-        }
+    #     if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
+    #         baseline_filter <- v_filter & (lin_systems$Flux.variant=="FluxCripple")
+    #         baseline <- lin_systems[baseline_filter,]
+    #     } else {
+    #         ## Use variant with almost most instructions as the baseline:
+    #         ls_v_ordered <- data.frame(lin_systems[v_filter,])
+    #         ls_v_ordered <- ls_v_ordered[order(-ls_v_ordered$wg_cycles),]
+    #         ls_v_ordered <- ls_v_ordered[grepl("Normal", ls_v_ordered$Flux.variant),]
+    #         ls_v_ordered <- ls_v_ordered[ls_v_ordered$Flux.variant != "Normal-PrecomputeLength;",]
+    #         mini_baseline_variant <- ls_v_ordered$Flux.variant[1]
+    #         baseline <- ls_v_ordered[ls_v_ordered$Flux.variant==mini_baseline_variant,]
+    #     }
+    #     if (nrow(baseline) != 1) {
+    #         # Possible when using multiple compilers.
+    #         baseline <- baseline[order(baseline$runtime),]
+    #         baseline <- baseline[1,]
+    #     }
+    #     if (nrow(baseline) != 1) {
+    #         print(paste("nrow(baseline) =", nrow(baseline)))
+    #         print(baseline)
+    #         stop(paste("Failed to get baseline for var_id =", v))
+    #     }
 
-        for (f in data_col_names) {
-            if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
-                lin_systems_relative[v_filter, f] <- lin_systems[v_filter, f] - baseline[1,f]
-            } else {
-                lin_systems_relative[v_filter, f] <- baseline[1,f] - lin_systems[v_filter, f]
-            }
-        }
-    }
+    #     for (f in data_col_names) {
+    #         if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
+    #             lin_systems_relative[v_filter, f] <- lin_systems[v_filter, f] - baseline[1,f]
+    #         } else {
+    #             lin_systems_relative[v_filter, f] <- baseline[1,f] - lin_systems[v_filter, f]
+    #         }
+    #     }
+    # }
 
     ## Can fit to both 'flux' and 'indirect_rw' kernels
     lin_systems <- data.frame(model_data)
@@ -935,13 +944,13 @@ predict_fn <- function(model_perm_id) {
     lin_systems$tmp_order <- NULL
     lin_systems <- lin_systems[order(lin_systems[,"var_id"], lin_systems[,"kernel"]),]
 
-    ## Filter-out baseline (drop.sum = 0):
-    lin_systems_relative[,"drop.sum"] <- 0
-    for (eu_col in model_eu_and_mem_colnames) {
-        lin_systems_relative[,"drop.sum"] <- abs(lin_systems_relative[,eu_col]) + lin_systems_relative[,"drop.sum"]
-    }
-    lin_systems_relative <- lin_systems_relative[lin_systems_relative$drop.sum != 0,]
-    lin_systems_relative$drop.sum <- NULL
+    # ## Filter-out baseline (drop.sum = 0):
+    # lin_systems_relative[,"drop.sum"] <- 0
+    # for (eu_col in model_eu_and_mem_colnames) {
+    #     lin_systems_relative[,"drop.sum"] <- abs(lin_systems_relative[,eu_col]) + lin_systems_relative[,"drop.sum"]
+    # }
+    # lin_systems_relative <- lin_systems_relative[lin_systems_relative$drop.sum != 0,]
+    # lin_systems_relative$drop.sum <- NULL
 
     #################################################################################
 
@@ -1097,6 +1106,11 @@ predict_fn <- function(model_perm_id) {
         mg_cfd_data <- var_lin_system
         mg_cfd_data <- mg_cfd_data[,c("wg_cycles", model_coef_colnames)]
         mg_cfd_data$wg_cycles <- 0.0
+        for (mcc in model_coef_colnames) {
+            if (sum(mg_cfd_data[,mcc]) == 0) {
+                mg_cfd_data[,mcc] <- NULL
+            }
+        }
         write.csv(mg_cfd_data, file.path(model_dirname, "prediction_data.csv"), row.names=FALSE)
         python_output <- system(paste("python", file.path(script_dirpath, "model_interface.py"), "-p", "-d", model_dirname), intern=TRUE)
         prediction_filepath <- file.path(model_dirname, "prediction.csv")

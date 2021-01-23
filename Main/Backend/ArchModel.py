@@ -270,6 +270,45 @@ class ArchModel(object):
             walltime_cycles_fma = np.subtract(port_cycles.max(axis=1), last_cycles)
             last_cycles = port_cycles.max(axis=1)
 
+        ## SIMD FP div:
+        if "eu.simd_fp_div" in insn_indices:
+            fp_div_idx =  insn_indices["eu.simd_fp_div"]
+            fp_div_cycles = y_insn_cycles[:,fp_div_idx] 
+            penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_div_idx])
+            fp_div_cycles += penalty
+            port_cycles[:,0] += fp_div_cycles
+            if conf["cpu_is_skylake"] and conf["avx512_simd_enabled"]:
+                port_cycles[:,1] += y_insn_cycles[:,fp_div_idx]
+        if do_track_contributions:
+            walltime_cycles_simd_divs = np.subtract(port_cycles.max(axis=1), last_cycles)
+            last_cycles = port_cycles.max(axis=1)
+
+        ## SIMD FP add:
+        if "eu.simd_fp_add" in insn_indices:
+            fp_add_idx = insn_indices["eu.simd_fp_add"]
+            fp_add_cycles = y_insn_cycles[:,fp_add_idx].copy()
+            penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_add_idx])
+            fp_add_cycles += penalty
+            if conf["cpu_is_skylake"] and conf["avx512_simd_enabled"]:
+                port_cycles[:,0] += fp_add_cycles
+                port_cycles[:,1] += fp_add_cycles
+            else:
+                self.allocate_cycles_to_ports(fp_add_cycles, port_cycles, self.fp_add_ports)
+        ## SIMD FP mult:
+        if "eu.simd_fp_mul" in insn_indices:
+            fp_mul_idx = insn_indices["eu.simd_fp_mul"]
+            fp_mul_cycles = y_insn_cycles[:,fp_mul_idx].copy()
+            penalty = np.multiply(cycle_penalty_per_insn, self.A.values[:,fp_mul_idx])
+            fp_mul_cycles += penalty
+            if conf["cpu_is_skylake"] and conf["avx512_simd_enabled"]:
+                port_cycles[:,0] += fp_mul_cycles
+                port_cycles[:,1] += fp_mul_cycles
+            else:
+                self.allocate_cycles_to_ports(fp_mul_cycles, port_cycles, self.fp_mul_ports)
+        if do_track_contributions:
+            walltime_cycles_simd_fp = np.subtract(port_cycles.max(axis=1), last_cycles)
+            last_cycles = port_cycles.max(axis=1)
+
         ## Vec ALU:
         if "eu.simd_alu" in insn_indices:
             simd_alu_idx = insn_indices["eu.simd_alu"]
@@ -355,6 +394,33 @@ class ArchModel(object):
                     bottleneck += "avx512-"
                     bottleneck += ["{0}".format(i) for i in p]
                     bottleneck += "%"
+
+            if bool(np.any(walltime_cycles_simd_divs != np.zeros(len(walltime_cycles_simd_divs)))):
+                if do_print:
+                    print("SIMD DIVS | {0}".format(walltime_cycles_simd_divs))
+                do_contribute["eu.simd_fp_div"] = True
+                p = walltime_cycles_simd_divs / y_model
+                p = np.round(p*100.0, 0)
+                bottleneck[bottleneck!=None] += ";"
+                bottleneck[bottleneck==None] = ""
+                bottleneck += "simd_fp_div-"
+                bottleneck += ["{0}".format(i) for i in p]
+                bottleneck += "%"
+
+            if bool(np.any(walltime_cycles_simd_fp != np.zeros(len(walltime_cycles_simd_fp)))):
+                if do_print:
+                    print("SIMD FP  | {0}".format(walltime_cycles_simd_fp))
+                if "eu.simd_fp_add" in insn_indices:
+                    do_contribute["eu.simd_fp_add"] = True
+                if "eu.simd_fp_mul" in insn_indices:
+                    do_contribute["eu.simd_fp_mul"] = True
+                p = walltime_cycles_simd_fp / y_model
+                p = np.round(p*100.0, 0)
+                bottleneck[bottleneck!=None] += ";"
+                bottleneck[bottleneck==None] = ""
+                bottleneck += "fp-"
+                bottleneck += ["{0}".format(i) for i in p]
+                bottleneck += "%"
 
             if bool(np.any(walltime_cycles_divs != np.zeros(len(walltime_cycles_divs)))):
                 if do_print:

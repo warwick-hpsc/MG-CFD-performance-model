@@ -4,7 +4,7 @@ library(reshape)
 var_id_sep = "^"
 
 get_data_col_names <- function(d) {
-    data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'up', 'down', 'indirect_rw')
+    data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'indirect_rw')
     
     possible_data_col_names <- c()
     for (t in data_classes) {
@@ -275,7 +275,9 @@ split_kmp_hw_subset <- function(d) {
 }
 
 reshape_data_cols <- function(D, kernels_to_retain) {
-    id_vars <- intersect(c("iflux.variant", "Flux.variant", "var_id", "PAPI.counter", "Num.threads", "Instruction.set", "CC"), names(D))
+    id_var_candidates <- c("iflux.variant", "Flux.variant", "var_id", "PAPI.counter", "Num.threads", "Instruction.set", "CC")
+    id_var_candidates <- c(id_var_candidates, "SIMD.conflict.avoidance.strategy")
+    id_vars <- intersect(id_var_candidates, names(D))
     data_vars <- setdiff(names(D), id_vars)
     if (length(data_vars) == 0) {
         stop("reshape_data_cols() called on DF with no data cols to melt.")
