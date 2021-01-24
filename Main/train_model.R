@@ -49,7 +49,7 @@ mandatory_columns <- c("Instruction.set", "CPU", "CC")
 ## Model config:
 ##########################################################
 
-data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'unstructured_stream')
+data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'unstructured_stream', 'compute_stream', 'unstructured_compute')
 
 model_conf_params <- c()
 model_conf_params <- c(model_conf_params, "do_spill_penalty")
@@ -82,10 +82,10 @@ model_fitting_strategy_values <- unlist(model_fitting_strategy_datums, use.names
 # model_fitting_strategy_values <- c("miniDifferences")
 # model_fitting_strategy_values <- c("miniAbsolute")
 
-relative_model_fitting_baselines <- list(Normal="Normal", FluxCripple="FluxCripple")
+relative_model_fitting_baselines <- list(Normal="Normal", FluxSynthetic="Flux-Synthetic")
 # baseline_kernel_values <- unlist(relative_model_fitting_baselines, use.names=FALSE)
 # baseline_kernel_values <- c("Normal")
-baseline_kernel_values <- c("FluxCripple")
+baseline_kernel_values <- c("Flux-Synthetic")
 
 # relative_projection_directions <- list(fromMini="fromMini", fromMiniLean="fromMiniLean")
 # relative_project_direction_values <- unlist(relative_projection_directions, use.names=FALSE)
@@ -128,16 +128,19 @@ for (l in 0:3) {
 preprocess_input_csv <- function(D) {
     if ("Flux.options" %in% names(D)) {
         D$Flux.options <- as.character(D$Flux.options)
-        if ("Flux.variant" %in% names(D)) {
-            D$Flux.variant <- as.character(D$Flux.variant)
+        # if ("Flux.variant" %in% names(D)) {
+        #     D$Flux.variant <- as.character(D$Flux.variant)
 
-            D <- D[D$Flux.variant == "Normal" | D$Flux.variant == "FluxCripple",]
+        #     D <- D[D$Flux.variant == "Normal" | D$Flux.variant == "Flux-Synthetic",]
 
-            filter <- D$Flux.options != ""
-            D$Flux.variant[filter] <- paste0(D$Flux.variant[filter], "-", D$Flux.options[filter])
-        } else {
-            D$Flux.variant <- D$Flux.options
-        }
+        #     filter <- D$Flux.options != ""
+        #     D$Flux.variant[filter] <- paste0(D$Flux.variant[filter], "-", D$Flux.options[filter])
+        # } else {
+        #     D$Flux.variant <- D$Flux.options
+        # }
+        f <- D$Flux.options != ""
+        D$Flux.variant[f] <- paste0("Flux-", D$Flux.options[f])
+        D$Flux.variant[!f] <- "Normal"
         D$Flux.options <- NULL
     }
 
@@ -146,6 +149,13 @@ preprocess_input_csv <- function(D) {
     }
     if ("MG.cycles" %in% names(D)) {
         D$MG.cycles <- NULL
+    }
+
+    for (l in c(0,1,2,3)) {
+        c1 <- paste0("compute_flux_edge", l)
+        if (c1 %in% names(D)) {
+            D <- rename_col(D, c1, paste0("flux",l))
+        }
     }
 
     ## Drop non-varying cols:
@@ -388,7 +398,6 @@ for (cn in names(ic)) {
         mem_event_colnames <- c(mem_event_colnames, cn)
     }
 }
-## TODO: continue from here!
 
 ic <- preprocess_input_csv(ic)
 #########################################
@@ -447,9 +456,7 @@ if (nrow(loop_niters_data)==0) {
 }
 
 ## Discard unnecessary PAPI events:
-# necessary_papi_events <- c("PAPI_TOT_CYC", "PAPI_TOT_CYC_MAX", "PAPI_TOT_INS")
-# necessary_papi_events <- c("PAPI_TOT_CYC", "PAPI_TOT_CYC_MAX", "PAPI_TOT_INS", "PAPI_TOT_INS_MAX")
-necessary_papi_events <- c("PAPI_TOT_CYC_MEAN", "PAPI_TOT_INS_MEAN")
+necessary_papi_events <- c("PAPI_TOT_CYC.THREADS_MEAN", "PAPI_TOT_INS.THREADS_MEAN")
 for (pe in necessary_papi_events) {
     if (!(pe %in% papi_counter_names)) {
         stop(paste0("ERROR: Event '", pe, "' not in papi data csv."))
@@ -458,6 +465,8 @@ for (pe in necessary_papi_events) {
 papi_events_to_to_keep <- c(necessary_papi_events)
 papi_data <- papi_data[papi_data$PAPI.counter %in% papi_events_to_to_keep,]
 papi_data$PAPI.counter <- as.character(papi_data$PAPI.counter)
+
+## TODO: continue from here
 
 ## Convert the "<kernel><level>" columns into rows:
 papi_data <- reshape_data_cols(papi_data, c("flux", "unstructured_stream"))
@@ -619,7 +628,7 @@ for (eu_col in eu_colnames) {
     perf_data$PAPI_TOT_INS.expected <- (perf_data[,eu_col] * perf_data[,"niters"]) + perf_data$PAPI_TOT_INS.expected
 }
 # perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS_MAX / perf_data$niters, digits=1)
-perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS_MEAN / perf_data$niters, digits=1)
+perf_data$PAPI_TOT_INS.piter <- round(perf_data$PAPI_TOT_INS.THREADS_MEAN / perf_data$niters, digits=1)
 perf_data$PAPI_TOT_INS.expected_piter <- round(perf_data$PAPI_TOT_INS.expected / perf_data$niters, digits=1)
 perf_data$PAPI_TOT_INS.eu_diff <- perf_data$PAPI_TOT_INS.piter - perf_data$PAPI_TOT_INS.expected_piter
 ## My handling of loop unrolling is almost perfect but not quite, so allow 
@@ -659,8 +668,8 @@ for (col in c("Num.threads")) {
     }
 }
 ## Update: focus on predicting grind time
-# perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC_MAX / perf_data$niters
-perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC_MEAN / perf_data$niters
+# perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC.THREADS_MAX / perf_data$niters
+perf_data$wg_cycles <- perf_data$PAPI_TOT_CYC.THREADS_MEAN / perf_data$niters
 perf_data$wg_sec    <- perf_data$runtime / perf_data$niters
 
 # cpu <- infer_run_value("CPU", raw_source_data_dirpath)
@@ -918,15 +927,15 @@ predict_fn <- function(model_perm_id) {
     # for (v in unique(lin_systems$var_id)) {
     #     v_filter <- lin_systems$var_id==v
 
-    #     if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
-    #         baseline_filter <- v_filter & (lin_systems$Flux.variant=="FluxCripple")
+    #     if (baseline_kernel == relative_model_fitting_baselines[["Flux-Synthetic"]]) {
+    #         baseline_filter <- v_filter & (lin_systems$Flux.variant=="Flux-Synthetic")
     #         baseline <- lin_systems[baseline_filter,]
     #     } else {
     #         ## Use variant with almost most instructions as the baseline:
     #         ls_v_ordered <- data.frame(lin_systems[v_filter,])
     #         ls_v_ordered <- ls_v_ordered[order(-ls_v_ordered$wg_cycles),]
     #         ls_v_ordered <- ls_v_ordered[grepl("Normal", ls_v_ordered$Flux.variant),]
-    #         ls_v_ordered <- ls_v_ordered[ls_v_ordered$Flux.variant != "Normal-PrecomputeLength;",]
+    #         ls_v_ordered <- ls_v_ordered[ls_v_ordered$Flux.variant != "Flux-PrecomputeLength;",]
     #         mini_baseline_variant <- ls_v_ordered$Flux.variant[1]
     #         baseline <- ls_v_ordered[ls_v_ordered$Flux.variant==mini_baseline_variant,]
     #     }
@@ -942,7 +951,7 @@ predict_fn <- function(model_perm_id) {
     #     }
 
     #     for (f in data_col_names) {
-    #         if (baseline_kernel == relative_model_fitting_baselines[["FluxCripple"]]) {
+    #         if (baseline_kernel == relative_model_fitting_baselines[["Flux-Synthetic"]]) {
     #             lin_systems_relative[v_filter, f] <- lin_systems[v_filter, f] - baseline[1,f]
     #         } else {
     #             lin_systems_relative[v_filter, f] <- baseline[1,f] - lin_systems[v_filter, f]
@@ -1054,7 +1063,7 @@ predict_fn <- function(model_perm_id) {
     ## Prepare and write out model fitting data for Python:
     model_coef_colnames <- model_eu_and_mem_colnames
     model_data <- var_lin_system[,c("Flux.variant", "wg_cycles", model_coef_colnames)]
-    model_fitting_data <- model_data[model_data$Flux.variant!="FluxCripple",]
+    model_fitting_data <- model_data[model_data$Flux.variant!="Flux-Synthetic",]
     model_fitting_data[,"wg_cycles"] <- round(model_fitting_data[,"wg_cycles"], digits=1)
 
     ## Prune unnecessary columns to assist model fitting:

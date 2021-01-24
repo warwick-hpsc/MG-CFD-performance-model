@@ -34,9 +34,11 @@ for f in ["PAPI.mean.csv", "Times.mean.csv"]:
 		else:
 			value_colname = "Count"
 		pivot_cols = list(set(df.columns.values).difference(["Loop", "MG level", value_colname]))
-		df2 = df.pivot_table(index=pivot_cols, columns=["Loop", "MG level"], values=value_colname)
+		df2 = df.pivot_table(index=pivot_cols, columns=["Loop", "MG level"], values=value_colname, fill_value=0)
 		df2.columns = [''.join([str(x) for x in col]).strip() for col in df2.columns.values]
 		df2.reset_index(inplace=True)
+		renames = {"Event":"PAPI.counter"}
+		df2.rename(columns=renames, inplace=True)
 		df2.to_csv(dest_fp, index=False)
 	else:
 		shutil.copyfile(src_fp, dest_fp)
