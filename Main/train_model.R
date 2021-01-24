@@ -49,7 +49,7 @@ mandatory_columns <- c("Instruction.set", "CPU", "CC")
 ## Model config:
 ##########################################################
 
-data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'indirect_rw')
+data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'unstructured_stream')
 
 model_conf_params <- c()
 model_conf_params <- c(model_conf_params, "do_spill_penalty")
@@ -334,7 +334,15 @@ if ("Size" %in% names(ic)) {
 ic$kernel <- as.character(ic$kernel)
 ic[ic$kernel=="compute_flux_edge", "kernel"] <- "flux"
 
-## If no spills were detected, infer from difference between flux and indirect_rw kernels. 
+## 'Flux options' did not affect unstructured_compute performance, so prune data:
+ic$Flux.options <- as.character(ic$Flux.options)
+f <- ic$kernel=="unstructured_compute" & ic$Flux.options==""
+ic_syn <- ic[f,]
+ic_syn$kernel <- "flux"
+ic_syn$Flux.options <- "Synthetic"
+ic <- safe_rbind(ic[ic$kernel!="unstructured_compute",], ic_syn)
+
+## If no spills were detected, infer from difference between flux and unstructured_stream kernels. 
 ## From analysis of Intel assembly, most of this difference are spills.
 ## "Most" => roughly 75% of extra loads, and 100% of extra stores, are for spills.
 if (!("mem.load_spills" %in% names(ic))) {
@@ -344,7 +352,11 @@ if (!("mem.store_spills" %in% names(ic))) {
     ic[,"mem.store_spills"] <- 0
 }
 ic_flux <- ic[ic$kernel=="flux",]
-ic_rw   <- ic[ic$kernel=="indirect_rw",]
+ic_rw   <- ic[ic$kernel=="unstructured_stream",]
+## Duplicate rw data for unstructured_compute kernel:
+ic_rw_uc <- ic_rw[ic_rw$Flux.options == "",]
+ic_rw_uc$Flux.options <- "Synthetic"
+ic_rw <- safe_rbind(ic_rw, ic_rw_uc)
 for (cn in exec_unit_colnames) {
     ic_rw[,cn] <- NULL
 }
@@ -363,7 +375,7 @@ ic_flux[,"mem.loads.rw"] <- NULL
 ic_flux[,"mem.stores.rw"] <- NULL
 ic_flux[,"mem.load_spills.rw"] <- NULL
 ic_flux[,"mem.store_spills.rw"] <- NULL
-ic_rw <- ic[ic$kernel=="indirect_rw",]
+ic_rw <- ic[ic$kernel=="unstructured_stream",]
 ic <- safe_rbind(ic_flux, ic_rw)
 
 ## Treat spill stores identically to memory stores:
@@ -376,6 +388,7 @@ for (cn in names(ic)) {
         mem_event_colnames <- c(mem_event_colnames, cn)
     }
 }
+## TODO: continue from here!
 
 ic <- preprocess_input_csv(ic)
 #########################################
@@ -447,11 +460,11 @@ papi_data <- papi_data[papi_data$PAPI.counter %in% papi_events_to_to_keep,]
 papi_data$PAPI.counter <- as.character(papi_data$PAPI.counter)
 
 ## Convert the "<kernel><level>" columns into rows:
-papi_data <- reshape_data_cols(papi_data, c("flux", "indirect_rw"))
+papi_data <- reshape_data_cols(papi_data, c("flux", "unstructured_stream"))
 papi_data <- rename_col(papi_data, "value", "count")
-time_data <- reshape_data_cols(time_data, c("flux", "indirect_rw"))
+time_data <- reshape_data_cols(time_data, c("flux", "unstructured_stream"))
 time_data <- rename_col(time_data, "value", "runtime")
-loop_niters_data <- reshape_data_cols(loop_niters_data, c("flux", "indirect_rw"))
+loop_niters_data <- reshape_data_cols(loop_niters_data, c("flux", "unstructured_stream"))
 loop_niters_data <- rename_col(loop_niters_data, "value", "niters")
 
 ## Transpose the PAPI counters, from rows to columns:
@@ -886,13 +899,13 @@ predict_fn <- function(model_perm_id) {
         model_eu_colnames <- intersect(names(model_data), c(exec_unit_colnames))
 
         # # Drop indirect-rw kernel:
-        # model_data <- model_data[model_data["kernel"]!="indirect_rw",]
+        # model_data <- model_data[model_data["kernel"]!="unstructured_stream",]
     }
 
     #################################################################################
     ## Construct linear system:
     #################################################################################
-    model_data_flux <- model_data[model_data$kernel != "indirect_rw",]
+    model_data_flux <- model_data[model_data$kernel != "unstructured_stream",]
     model_data_flux$kernel <- NULL
 
     lin_systems <- data.frame(model_data_flux)
@@ -937,7 +950,7 @@ predict_fn <- function(model_perm_id) {
     #     }
     # }
 
-    ## Can fit to both 'flux' and 'indirect_rw' kernels
+    ## Can fit to both 'flux' and 'unstructured_stream' kernels
     lin_systems <- data.frame(model_data)
     lin_systems$tmp_order <- lin_systems$Flux.variant=="Normal"
     lin_systems <- lin_systems[rev(order(lin_systems$tmp_order)),]
