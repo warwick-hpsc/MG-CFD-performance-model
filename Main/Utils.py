@@ -47,8 +47,11 @@ def safe_pd_filter(df, field, value):
     raise Exception("No rows left after filter: '{0}' == '{1}'".format(field, value))
   return df
 
-def load_insn_eu_mapping():
-  exec_unit_mapping_filepath = os.path.join(utils_script_dirpath, "Backend", "insn_eu_mapping.csv")
+def load_insn_eu_mapping(isa_group="Intel"):
+  if isa_group == "ARM":
+    exec_unit_mapping_filepath = os.path.join(utils_script_dirpath, "Backend", "ARM-instructions.csv")
+  else:
+    exec_unit_mapping_filepath = os.path.join(utils_script_dirpath, "Backend", "Intel-instructions.csv")
   df = pd.read_csv(exec_unit_mapping_filepath)
 
   exec_unit_mapping = {}
@@ -147,10 +150,10 @@ def instructions_tally_to_dict(tally_filepath):
     counts["insn."+insn] = count
   return counts
 
-def categorise_instructions_tally(tally_filepath):
+def categorise_instructions_tally(tally_filepath, isa_group="Intel"):
   # print("Categorising instructions in file: " + tally_filepath)
 
-  eu_mapping = load_insn_eu_mapping()
+  eu_mapping = load_insn_eu_mapping(isa_group)
   exec_units = eu_mapping.keys()
   eu_classes = ["eu."+eu for eu in exec_units]
 
@@ -189,10 +192,10 @@ def categorise_instructions_tally(tally_filepath):
 
   return counts
 
-def categorise_aggregated_instructions_tally(tally_filepath):
+def categorise_aggregated_instructions_tally(tally_filepath, isa_group="Intel"):
   # print("Categorising aggregated instructions in file: " + tally_filepath)
 
-  eu_mapping = load_insn_eu_mapping()
+  eu_mapping = load_insn_eu_mapping(isa_group)
   exec_units = eu_mapping.keys()
   eu_classes = ["eu."+eu for eu in exec_units]
 
