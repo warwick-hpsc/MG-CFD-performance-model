@@ -4,7 +4,7 @@ library(reshape)
 var_id_sep = "^"
 
 get_data_col_names <- function(d) {
-    data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'indirect_rw')
+    data_classes <- c('flux.update', 'flux', 'update', 'compute_step', 'time_step', 'restrict', 'prolong', 'unstructured_stream', 'compute_stream', 'unstructured_compute')
     
     possible_data_col_names <- c()
     for (t in data_classes) {
