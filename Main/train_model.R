@@ -1,6 +1,7 @@
 library(parallel)
 library(MASS)
 numCores <- detectCores(logical=FALSE)
+numCores <- numCores-1
 library(flock)
 
 ############################################################
@@ -41,7 +42,6 @@ source(file.path(script_dirpath, "../utils.R"))
 ## to get to CPI of div-fast and I do not know why.
 ## By having "CC" in reserved_col_names, it ends up being ignored by model fitting.
 reserved_col_names <- c('Num.threads', 'PAPI.counter', 'Flux.variant', "niters", "kernel")
-reserved_col_names <- c(reserved_col_names, "SIMD.conflict.avoidance.strategy")
 
 mandatory_columns <- c("Instruction.set", "CPU", "CC")
 
@@ -61,8 +61,8 @@ model_conf_params <- c(model_conf_params, "model_fitting_strategy")
 model_conf_params <- c(model_conf_params, "baseline_kernel")
 # model_conf_params <- c(model_conf_params, "relative_project_direction")
 
-do_spill_penalty_values <- c(FALSE, TRUE)
-# do_spill_penalty_values <- c(FALSE)
+# do_spill_penalty_values <- c(FALSE, TRUE)
+do_spill_penalty_values <- c(FALSE)
 # do_spill_penalty_values <- c(TRUE)
 
 # do_load_penalty_values <- c(FALSE, TRUE)
@@ -99,10 +99,15 @@ optimisation_search_algorithm_values <- c("basin")
 
 ## 100 iterations should be enough to complete local minimisation, but 
 ## set to 150 to be sure.
-basin_local_iters_values <- c(150)
-## Do not need many jumps:
-basin_jump_values <- c(10)
-basin_step_values <- c(1)
+# basin_local_iters_values <- c(150)
+# ## Do not need many jumps:
+# basin_jump_values <- c(10)
+# basin_step_values <- c(1)
+## UPDATE: fitting model to SIMD performance data needs more searching, particulary to 
+##         find best CPI estimate for eu.simd_fp_div (should be ~38 for Intel-AVX/AVX2, ~34 for Clang)
+basin_local_iters_values <- c(400)
+basin_jump_values <- c(15)
+basin_step_values <- c(2)
 
 # basin_local_iters_values <- c(250, 300)
 # basin_jump_values <- c(15, 50)
@@ -124,6 +129,8 @@ for (l in 0:3) {
         data_cols_to_ignore <- c(paste0(k, l), data_cols_to_ignore)
     }
 }
+
+isa_group <- "Intel"
 
 preprocess_input_csv <- function(D) {
     if ("Flux.options" %in% names(D)) {
@@ -155,6 +162,21 @@ preprocess_input_csv <- function(D) {
         c1 <- paste0("compute_flux_edge", l)
         if (c1 %in% names(D)) {
             D <- rename_col(D, c1, paste0("flux",l))
+        }
+    }
+
+    if ("ISA.group" %in% names(D)) {
+        if (length(unique(D$ISA.group)) > 1) {
+            stop("Training data must only have one ISA group (Intel/ARM)")
+        }
+        isa_group <- D$ISA.group[1]
+        D$ISA.group <- NULL
+    }
+
+    if ("SIMD.failed" %in% names(D)) {
+        f <- D$SIMD.failed == "True"
+        if ("SIMD.len" %in% names(D)) {
+            D$SIMD.len[f] <- 1
         }
     }
 
@@ -258,7 +280,11 @@ categorise_instructions <- function(ic) {
     }
 
     exec_unit_instructions <- list()
-    exec_unit_mapping_filepath <- file.path(script_dirpath, "Backend", "insn_eu_mapping.csv")
+    if (isa_group == "ARM") {
+        exec_unit_mapping_filepath <- file.path(script_dirpath, "Backend", "ARM-instructions.csv")
+    } else {
+        exec_unit_mapping_filepath <- file.path(script_dirpath, "Backend", "Intel-instructions.csv")
+    }
     exec_unit_mapping <- read.csv(exec_unit_mapping_filepath)
     exec_unit_mapping[,"instruction"] <- as.character(exec_unit_mapping[,"instruction"])
     exec_unit_mapping[,"exec_unit"] <- as.character(exec_unit_mapping[,"exec_unit"])
@@ -466,8 +492,6 @@ papi_events_to_to_keep <- c(necessary_papi_events)
 papi_data <- papi_data[papi_data$PAPI.counter %in% papi_events_to_to_keep,]
 papi_data$PAPI.counter <- as.character(papi_data$PAPI.counter)
 
-## TODO: continue from here
-
 ## Convert the "<kernel><level>" columns into rows:
 papi_data <- reshape_data_cols(papi_data, c("flux", "unstructured_stream"))
 papi_data <- rename_col(papi_data, "value", "count")
@@ -623,6 +647,7 @@ perf_data$CPU <- NULL
 #################################################################################
 ## Verify that #assembly * #num_iters == PAPI_TOT_INS:
 #################################################################################
+perf_data <- split_col(perf_data, "var_id")
 perf_data$PAPI_TOT_INS.expected <- 0
 for (eu_col in eu_colnames) {
     perf_data$PAPI_TOT_INS.expected <- (perf_data[,eu_col] * perf_data[,"niters"]) + perf_data$PAPI_TOT_INS.expected
@@ -639,7 +664,7 @@ bad_run_threshold <- rep(1.0, nrow(perf_data))
 bad_run_threshold[grep("AVX512", perf_data$var_id)] <- 66.0
 ## Allow a tolerance where manual CA is used, due to nested loop admin instructions:
 manual_ca_mask <- grep("Manual", perf_data$SIMD.conflict.avoidance.strategy)
-bad_run_threshold[manual_ca_mask] <- 0.05*perf_data[manual_ca_mask, "PAPI_TOT_INS.piter"]
+bad_run_threshold[manual_ca_mask] <- 0.1*perf_data[manual_ca_mask, "PAPI_TOT_INS.piter"]
 
 bad_runs <- abs(perf_data$PAPI_TOT_INS.eu_diff) > bad_run_threshold
 if (sum(bad_runs)>0) {
@@ -657,6 +682,10 @@ perf_data$PAPI_TOT_INS.piter <- NULL
 perf_data$PAPI_TOT_INS.expected_piter <- NULL
 perf_data$PAPI_TOT_INS.eu_diff <- NULL
 print("Good, sum of instructions agrees with PAPI_TOT_INS")
+
+cols_to_concat <- setdiff(names(perf_data), c(reserved_col_names, data_col_names, papi_events_to_to_keep, "runtime", "kernel", eu_and_mem_colnames))
+cols_to_concat <- setdiff(cols_to_concat, c("CPU"))
+perf_data <- concat_cols(perf_data, cols_to_concat, "var_id", TRUE)
 #################################################################################
 
 ## Clean perf_data
@@ -737,7 +766,7 @@ model_perms <- merge(model_perms, optimisation_search_algorithm_values, all=TRUE
 model_perms <- rename_col(model_perms, "y", "optimisation_search_algorithm")
 
 cols_to_default_to_zero <- c("load_penalty", "spill_penalty")
-cols_to_default_to_one <- c("eu.alu", "eu.simd_alu", "eu.fp_shuffle", "eu.fp_fma", "eu.fp_add", "eu.fp_div", "eu.fp_div_fast", "eu.avx512", "mem.loads", "mem.stores", "mem.spills")
+cols_to_default_to_one <- c("eu.alu", "eu.simd_alu", "eu.fp_shuffle", "eu.fp_fma", "eu.fp_add", "eu.fp_mul", "eu.fp_div", "eu.fp_div_fast", "eu.avx512", "eu.simd_fp_mul", "eu.simd_fp_div", "eu.simd_fp_fast", "mem.loads", "mem.stores", "mem.spills")
 lock_filename <- tempfile()
 append_and_write_row <- function(r) {
     if (!is.null(r)) {
@@ -1207,10 +1236,12 @@ prune_model_perms <- function(model_perms) {
 model_perms <- prune_model_perms(model_perms)
 
 model_perms_ids <- 1:nrow(model_perms)
+## Use this loop for debugging model fitting:
 # for (i in model_perms_ids) {
 #     print(paste("i=",i))
 #     r <- predict_fn(i)
 # }
+# q()
 res <- mclapply(model_perms_ids, predict_fn, mc.cores = numCores)
 # Reload 'cpi_estimates' from filesystem, only way I know of to synchronise between worker processes:
 projections_filename <- "cpi_estimates.csv"
