@@ -381,38 +381,40 @@ ic <- safe_rbind(ic[ic$kernel!="unstructured_compute",], ic_syn)
 ## If no spills were detected, infer from difference between flux and unstructured_stream kernels. 
 ## From analysis of Intel assembly, most of this difference are spills.
 ## "Most" => roughly 75% of extra loads, and 100% of extra stores, are for spills.
-if (!("mem.load_spills" %in% names(ic))) {
-    ic[,"mem.load_spills"] <- 0
+if ("unstructured_stream" %in% names(ic)) {
+    if (!("mem.load_spills" %in% names(ic))) {
+        ic[,"mem.load_spills"] <- 0
+    }
+    if (!("mem.store_spills" %in% names(ic))) {
+        ic[,"mem.store_spills"] <- 0
+    }
+    ic_flux <- ic[ic$kernel=="flux",]
+    ic_rw   <- ic[ic$kernel=="unstructured_stream",]
+    ## Duplicate rw data for unstructured_compute kernel:
+    ic_rw_uc <- ic_rw[ic_rw$Flux.options == "",]
+    ic_rw_uc$Flux.options <- "Synthetic"
+    ic_rw <- safe_rbind(ic_rw, ic_rw_uc)
+    for (cn in exec_unit_colnames) {
+        ic_rw[,cn] <- NULL
+    }
+    for (cn in mem_event_colnames) {
+        ic_rw <- rename_col(ic_rw, cn, paste0(cn, ".rw"))
+    }
+    ic_rw$kernel <- NULL
+    ic_flux <- merge(ic_flux, ic_rw)
+    f <- ic_flux[,"mem.load_spills"]==0
+    ic_flux[f,"mem.load_spills"] = (ic_flux[f,"mem.loads"] - ic_flux[f,"mem.loads.rw"]) * 0.75
+    ic_flux[f,"mem.loads"] = ic_flux[f,"mem.loads"] - ic_flux[f,"mem.load_spills"]
+    f <- ic_flux[,"mem.store_spills"]==0
+    ic_flux[f,"mem.store_spills"] = ic_flux[f,"mem.stores"] - ic_flux[f,"mem.stores.rw"]
+    ic_flux[f,"mem.stores"] = ic_flux[f,"mem.stores"] - ic_flux[f,"mem.store_spills"]
+    ic_flux[,"mem.loads.rw"] <- NULL
+    ic_flux[,"mem.stores.rw"] <- NULL
+    ic_flux[,"mem.load_spills.rw"] <- NULL
+    ic_flux[,"mem.store_spills.rw"] <- NULL
+    ic_rw <- ic[ic$kernel=="unstructured_stream",]
+    ic <- safe_rbind(ic_flux, ic_rw)
 }
-if (!("mem.store_spills" %in% names(ic))) {
-    ic[,"mem.store_spills"] <- 0
-}
-ic_flux <- ic[ic$kernel=="flux",]
-ic_rw   <- ic[ic$kernel=="unstructured_stream",]
-## Duplicate rw data for unstructured_compute kernel:
-ic_rw_uc <- ic_rw[ic_rw$Flux.options == "",]
-ic_rw_uc$Flux.options <- "Synthetic"
-ic_rw <- safe_rbind(ic_rw, ic_rw_uc)
-for (cn in exec_unit_colnames) {
-    ic_rw[,cn] <- NULL
-}
-for (cn in mem_event_colnames) {
-    ic_rw <- rename_col(ic_rw, cn, paste0(cn, ".rw"))
-}
-ic_rw$kernel <- NULL
-ic_flux <- merge(ic_flux, ic_rw)
-f <- ic_flux[,"mem.load_spills"]==0
-ic_flux[f,"mem.load_spills"] = (ic_flux[f,"mem.loads"] - ic_flux[f,"mem.loads.rw"]) * 0.75
-ic_flux[f,"mem.loads"] = ic_flux[f,"mem.loads"] - ic_flux[f,"mem.load_spills"]
-f <- ic_flux[,"mem.store_spills"]==0
-ic_flux[f,"mem.store_spills"] = ic_flux[f,"mem.stores"] - ic_flux[f,"mem.stores.rw"]
-ic_flux[f,"mem.stores"] = ic_flux[f,"mem.stores"] - ic_flux[f,"mem.store_spills"]
-ic_flux[,"mem.loads.rw"] <- NULL
-ic_flux[,"mem.stores.rw"] <- NULL
-ic_flux[,"mem.load_spills.rw"] <- NULL
-ic_flux[,"mem.store_spills.rw"] <- NULL
-ic_rw <- ic[ic$kernel=="unstructured_stream",]
-ic <- safe_rbind(ic_flux, ic_rw)
 
 ## Treat spill stores identically to memory stores:
 ic[,"mem.stores"] <- ic[,"mem.stores"] +  ic[,"mem.store_spills"]
@@ -533,6 +535,7 @@ nrow_post <- nrow(perf_data)
 if (nrow_pre != nrow_post) {
     stop(paste(nrow_pre, "rows before merge(papi_data, time_data) but", nrow_post, "rows after"))
 }
+perf_data <- perf_data[perf_data$runtime != 0.0,]
 
 ## Merge in loop iteration counts:
 nrow_pre <- nrow(perf_data)
