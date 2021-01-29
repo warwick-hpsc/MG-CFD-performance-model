@@ -84,6 +84,7 @@ class Solver(object):
 		self.insn_ranges["eu.avx512"] = (1.0, None)
 		self.insn_ranges["eu.simd_fp_add"] = (1.0, None)
 		self.insn_ranges["eu.simd_fp_mul"] = (1.0, None)
+		self.insn_ranges["eu.simd_fp_fma"] = (1.0, None)
 		self.insn_ranges["eu.simd_fp_div"] = (1.0, None)
 
 		self.insn_ranges["mem.stores"] = (1.0, None)
@@ -104,6 +105,7 @@ class Solver(object):
 		self.initial_guess["eu.avx512"] = 1.0
 		self.initial_guess["eu.simd_fp_add"] = 1.0
 		self.initial_guess["eu.simd_fp_mul"] = 1.0
+		self.initial_guess["eu.simd_fp_fma"] = 1.0
 		self.initial_guess["eu.simd_fp_div"] = 1.0
 
 		self.initial_guess["mem.stores"] = 1.0

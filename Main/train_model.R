@@ -130,7 +130,7 @@ for (l in 0:3) {
     }
 }
 
-isa_group <- "Intel"
+isa_group <- NULL
 
 preprocess_input_csv <- function(D) {
     if ("Flux.options" %in% names(D)) {
@@ -247,6 +247,13 @@ for (icf in ic_filename_candidates) {
 }
 if (is.null(ic)) {
     stop("instruction counts csv not present")
+}
+
+if ("ISA.group" %in% names(ic)) {
+    if (length(unique(ic$ISA.group)) > 1) {
+        stop("Training data must only have one ISA group (Intel/ARM)")
+    }
+    isa_group <- ic$ISA.group[1]
 }
 
 categorise_instructions <- function(ic) {
@@ -715,6 +722,7 @@ cpu_is_haswell <- length(grep("i5-4",cpu))>0
 cpu_is_ivy <- cpu_is_xeon && (length(grep("v2",cpu))>0)
 cpu_is_sandy <- length(grep("i5-2",cpu))>0
 cpu_is_westmere <- cpu_is_xeon && (length(grep("X5650",cpu))>0)
+cpu_is_vulkan <- length(grep("CaviumVulkan", cpu))>0
 if (cpu_is_cascade) {
     ## Cascade Lake architecture is same as Skylake
     cpu_is_skylake <- TRUE
@@ -738,6 +746,21 @@ if ("eu.load" %in% names(perf_data)) {
     ## I will have already counted memory loads separately, so do not need 
     ## this category.
     perf_data[,"eu.load"] <- NULL
+}
+
+## Merge FP FMA with FP mul. Otherwise, model overfits to Cavium ThunderX2 data, 
+## returning ridiculous CPI estimates = FP mul & FMA *more* expensive than div/sqrt
+if ("eu.fp_mul" %in% names(perf_data)) {
+    if ("eu.fp_fma" %in% names(perf_data)) {
+        perf_data[,"eu.fp_mul"] <- perf_data[,"eu.fp_mul"] + perf_data[,"eu.fp_fma"]
+        perf_data[,"eu.fp_fma"] <- NULL
+    }
+}
+if ("eu.simd_fp_mul" %in% names(perf_data)) {
+    if ("eu.simd_fp_fma" %in% names(perf_data)) {
+        perf_data[,"eu.simd_fp_mul"] <- perf_data[,"eu.simd_fp_mul"] + perf_data[,"eu.simd_fp_fma"]
+        perf_data[,"eu.simd_fp_fma"] <- NULL
+    }
 }
 
 eu_and_mem_colnames <- intersect(names(perf_data), c(exec_unit_colnames, mem_event_colnames))
@@ -769,7 +792,7 @@ model_perms <- merge(model_perms, optimisation_search_algorithm_values, all=TRUE
 model_perms <- rename_col(model_perms, "y", "optimisation_search_algorithm")
 
 cols_to_default_to_zero <- c("load_penalty", "spill_penalty")
-cols_to_default_to_one <- c("eu.alu", "eu.simd_alu", "eu.fp_shuffle", "eu.fp_fma", "eu.fp_add", "eu.fp_mul", "eu.fp_div", "eu.fp_div_fast", "eu.avx512", "eu.simd_fp_mul", "eu.simd_fp_div", "eu.simd_fp_fast", "mem.loads", "mem.stores", "mem.spills")
+cols_to_default_to_one <- c("eu.alu", "eu.simd_alu", "eu.fp_shuffle", "eu.fp_fma", "eu.fp_add", "eu.fp_mul", "eu.fp_div", "eu.fp_div_fast", "eu.avx512", "eu.simd_fp_mul", "eu.simd_fp_fma", "eu.simd_fp_div", "eu.simd_fp_fast", "mem.loads", "mem.stores", "mem.spills")
 lock_filename <- tempfile()
 append_and_write_row <- function(r) {
     if (!is.null(r)) {
@@ -1036,6 +1059,8 @@ predict_fn <- function(model_perm_id) {
         model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_ivy", "value"="TRUE"))
     else if (cpu_is_sandy)
         model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_sandy", "value"="TRUE"))
+    else if (cpu_is_vulkan)
+        model_config_df <- rbind(model_config_df, data.frame("key"="cpu_is_vulkan", "value"="TRUE"))
     else {
         stop(paste0("Do not know how to interpret this CPU: '", cpu, "'"))
     }
